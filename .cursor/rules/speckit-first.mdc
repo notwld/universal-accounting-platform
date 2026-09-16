@@ -1,0 +1,22 @@
+---
+description: Always run Speckit (spec → plan → tasks) before implementing anything.
+alwaysApply: true
+---
+
+# Speckit before implementation
+
+Never jump straight to code for feature work, refactors with behavior change, new modules, or multi-file changes.
+
+## Required order
+
+1. **Specify** — use the `speckit-specify` skill (`/speckit.specify`) so requirements live in Speckit artifacts.
+2. **Clarify** — if the spec is ambiguous, use `speckit-clarify` before planning.
+3. **Plan** — use `speckit-plan` (`/speckit.plan`).
+4. **Tasks** — use `speckit-tasks` (`/speckit.tasks`).
+5. **Implement** — only then use `speckit-implement` (`/speckit.implement`), still under ponytail ultra.
+
+## Hard stops
+
+- Do **not** write production/implementation code until the current change has a Speckit spec, plan, and tasks (or the user explicitly waives Speckit for that turn).
+- Trivial one-line fixes with no design choice may skip Speckit only if the user says so; default is still Speckit-first.
+- If Speckit skills/artifacts are missing, say so and run `specify` / the relevant `/speckit.*` skill before coding.
