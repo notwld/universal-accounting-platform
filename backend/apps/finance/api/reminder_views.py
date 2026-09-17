@@ -58,4 +58,11 @@ class ReminderRunView(APIView):
         user, org = _org_action(request, "finance.journal.read")
         as_of = request.data.get("as_of") or date.today().isoformat()
         created = run_reminders(user_id=user.id, org=org, as_of=date.fromisoformat(str(as_of)[:10]))
-        return envelope_success(request, {"created": [{"id": r.id, "object_id": r.object_id} for r in created]})
+        return envelope_success(
+            request,
+            {
+                "created": [
+                    {"id": r.id, "object_id": r.object_id, "emailed": bool(r.emailed_at)} for r in created
+                ]
+            },
+        )

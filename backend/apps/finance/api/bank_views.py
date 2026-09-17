@@ -5,13 +5,15 @@ from rest_framework.views import APIView
 from apps.authentication.exceptions import AuthAPIError, envelope_success
 from apps.authentication.permissions.authenticated import IsApplicationUser
 from apps.finance.api.views import ORG_HEADER, _org_action
-from apps.finance.models import BankLine, BankReconciliation, BankRule
+from apps.finance.models import BankFeed, BankLine, BankReconciliation, BankRule
 from apps.finance.services.banking import (
     apply_bank_rules,
     categorize_line,
     complete_reconciliation,
+    create_bank_feed,
     create_bank_rule,
     create_reconciliation,
+    fetch_bank_feed,
     import_statement,
     match_line,
     reopen_reconciliation,
@@ -61,7 +63,7 @@ class BankStatementImportView(APIView):
         uploaded = request.FILES.get("file")
         if not uploaded:
             raise AuthAPIError("validation_error", "file is required")
-        statement, created, duplicates = import_statement(
+        statement, created, duplicates, categorized = import_statement(
             user_id=user.id, org=org, account_id=request.data.get("account_id"), uploaded=uploaded
         )
         return envelope_success(
@@ -71,6 +73,7 @@ class BankStatementImportView(APIView):
                 "account_id": statement.account_id,
                 "created": [_line(x) for x in created],
                 "duplicates": duplicates,
+                "categorized": [_line(x) for x in categorized],
             },
             http_status=201,
         )
@@ -83,6 +86,11 @@ class BankLineListView(APIView):
     def get(self, request):
         _, org = _org_action(request, "finance.payment.record")
         qs = BankLine.objects.filter(organization=org)
+        from apps.finance.services.workflow import apply_saved_filter
+
+        qs = apply_saved_filter(
+            qs, org=org, resource="bank_line", filter_id=request.query_params.get("saved_filter_id")
+        )
         account_id = request.query_params.get("account_id")
         if account_id:
             qs = qs.filter(account_id=account_id)
@@ -170,6 +178,9 @@ def _rule(rule: BankRule):
     return {
         "id": rule.id,
         "pattern": rule.pattern,
+        "match_kind": rule.match_kind,
+        "amount_min": None if rule.amount_min is None else str(rule.amount_min),
+        "amount_max": None if rule.amount_max is None else str(rule.amount_max),
         "account_id": rule.account_id,
         "direction": rule.direction,
         "priority": rule.priority,
@@ -213,3 +224,51 @@ class BankRuleApplyView(APIView):
         user, org = _org_action(request, "finance.payment.record")
         lines = apply_bank_rules(user_id=user.id, org=org, account_id=request.data.get("account_id"))
         return envelope_success(request, {"categorized": [_line(x) for x in lines]})
+
+
+def _feed(feed: BankFeed):
+    return {
+        "id": feed.id,
+        "account_id": feed.account_id,
+        "url": feed.url,
+        "active": feed.active,
+        "last_fetched_at": None if not feed.last_fetched_at else _iso(feed.last_fetched_at),
+        "last_error": feed.last_error,
+    }
+
+
+class BankFeedListCreateView(APIView):
+    permission_classes = [IsApplicationUser]
+
+    @extend_schema(tags=["Finance"], parameters=[ORG_HEADER])
+    def get(self, request):
+        _, org = _org_action(request, "finance.payment.record")
+        items = [_feed(f) for f in BankFeed.objects.filter(organization=org)]
+        return envelope_success(request, {"items": items})
+
+    @extend_schema(tags=["Finance"], parameters=[ORG_HEADER])
+    def post(self, request):
+        user, org = _org_action(request, "finance.payment.record")
+        return envelope_success(
+            request, _feed(create_bank_feed(user_id=user.id, org=org, payload=request.data)), http_status=201
+        )
+
+
+class BankFeedFetchView(APIView):
+    permission_classes = [IsApplicationUser]
+
+    @extend_schema(tags=["Finance"], parameters=[ORG_HEADER])
+    def post(self, request, feed_id: str):
+        user, org = _org_action(request, "finance.payment.record")
+        statement, created, duplicates, categorized = fetch_bank_feed(
+            user_id=user.id, org=org, feed_id=feed_id
+        )
+        return envelope_success(
+            request,
+            {
+                "id": statement.id,
+                "created": [_line(x) for x in created],
+                "duplicates": duplicates,
+                "categorized": [_line(x) for x in categorized],
+            },
+        )

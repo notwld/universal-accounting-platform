@@ -41,7 +41,15 @@ class BillListCreateView(APIView):
     @extend_schema(tags=["Finance"], parameters=[ORG_HEADER])
     def get(self, request):
         _, org = _org_action(request, "finance.bill.create")
-        return envelope_success(request, {"items": [_bill(b) for b in Bill.objects.filter(organization=org)]})
+        from apps.finance.services.workflow import apply_saved_filter
+
+        qs = apply_saved_filter(
+            Bill.objects.filter(organization=org),
+            org=org,
+            resource="bill",
+            filter_id=request.query_params.get("saved_filter_id"),
+        )
+        return envelope_success(request, {"items": [_bill(b) for b in qs]})
 
     @extend_schema(tags=["Finance"], parameters=[ORG_HEADER])
     def post(self, request):

@@ -22,6 +22,8 @@ class JournalEntry(models.Model):
         VENDOR_CREDIT = "vendor_credit"
         VENDOR_REFUND = "vendor_refund"
         BANK = "bank"
+        STOCK = "stock"
+        ASSET = "asset"
 
     id = models.CharField(primary_key=True, max_length=36, default=new_uuid, editable=False)
     organization = models.ForeignKey(
@@ -70,6 +72,7 @@ class JournalLine(models.Model):
     organization = models.ForeignKey("tenancy.Organization", on_delete=models.PROTECT)
     account = models.ForeignKey("finance.Account", on_delete=models.PROTECT)
     description = models.CharField(max_length=255, blank=True, default="")
+    tag = models.ForeignKey("finance.ReportingTag", null=True, blank=True, on_delete=models.SET_NULL)
     debit = models.DecimalField(max_digits=20, decimal_places=8, default=0)
     credit = models.DecimalField(max_digits=20, decimal_places=8, default=0)
 

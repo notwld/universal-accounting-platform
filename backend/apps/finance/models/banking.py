@@ -85,7 +85,14 @@ class BankRule(models.Model):
 
     id = models.CharField(primary_key=True, max_length=36, default=new_uuid, editable=False)
     organization = models.ForeignKey("tenancy.Organization", on_delete=models.PROTECT)
+    class MatchKind(models.TextChoices):
+        CONTAINS = "contains"
+        REGEX = "regex"
+
     pattern = models.CharField(max_length=255)
+    match_kind = models.CharField(max_length=16, choices=MatchKind.choices, default=MatchKind.CONTAINS)
+    amount_min = models.DecimalField(max_digits=20, decimal_places=8, null=True, blank=True)
+    amount_max = models.DecimalField(max_digits=20, decimal_places=8, null=True, blank=True)
     account = models.ForeignKey("finance.Account", on_delete=models.PROTECT)
     direction = models.CharField(max_length=16, choices=Direction.choices, default=Direction.ANY)
     priority = models.IntegerField(default=0)
@@ -93,3 +100,16 @@ class BankRule(models.Model):
 
     class Meta:
         db_table = "finance_bank_rule"
+
+
+class BankFeed(models.Model):
+    id = models.CharField(primary_key=True, max_length=36, default=new_uuid, editable=False)
+    organization = models.ForeignKey("tenancy.Organization", on_delete=models.PROTECT)
+    account = models.ForeignKey("finance.Account", on_delete=models.PROTECT)
+    url = models.CharField(max_length=500)
+    active = models.BooleanField(default=True)
+    last_fetched_at = models.DateTimeField(null=True, blank=True)
+    last_error = models.TextField(blank=True, default="")
+
+    class Meta:
+        db_table = "finance_bank_feed"

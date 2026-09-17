@@ -25,6 +25,7 @@ from apps.finance.services.context import finance_tx
 from apps.finance.services.posting import post_generated
 from apps.finance.services.sales import resolve_rate, to_base
 from apps.finance.services.sequence import next_document_number
+from apps.finance.services.stock import receive_line, reverse_moves
 from apps.finance.services.tax import line_tax
 
 
@@ -65,6 +66,12 @@ def _snapshot_bill(bill: Bill, lines):
         if not item or item.status != "active":
             raise AuthAPIError("validation_error", "Item is inactive or missing")
         expense_id = raw.get("expense_account_id") or item.expense_account_id
+        if item.tracked:
+            if item.kind != Item.Kind.GOOD:
+                raise AuthAPIError("validation_error", "Tracked items must be goods")
+            if not settings.inventory_account_id:
+                raise AuthAPIError("validation_error", "Inventory and COGS accounts are required")
+            expense_id = settings.inventory_account_id
         if not expense_id:
             raise AuthAPIError("validation_error", "Expense account is required")
         qty = Decimal(str(raw.get("quantity") or 1))
@@ -162,6 +169,16 @@ def post_bill(*, user_id, org, bill, idempotency_key, skip_approval=False):
             idempotency_key=idempotency_key,
             body={"bill_id": inv.id},
         )
+        for line in inv.lines.select_related("item"):
+            receive_line(
+                org=org,
+                item=line.item,
+                qty=line.quantity,
+                cost=line.base_net,
+                source_type="bill",
+                source_id=inv.id,
+                entry_date=inv.entry_date,
+            )
         inv.status = Bill.Status.POSTED
         inv.number = next_document_number(org, "bill", "BILL-")
         inv.journal = posted
@@ -185,6 +202,15 @@ def post_vendor_credit(*, user_id, org, credit: VendorCredit, idempotency_key):
             user_id=user_id, org=org, entry_date=cn.entry_date, source_type=JournalEntry.Source.VENDOR_CREDIT,
             memo="vendor credit", gl_lines=gl, idempotency_key=idempotency_key, body={"vendor_credit_id": cn.id},
         )
+        if cn.bill_id:
+            reverse_moves(
+                org=org,
+                source_type="bill",
+                source_id=cn.bill_id,
+                entry_date=cn.entry_date,
+                new_source_type="vendor_credit",
+                new_source_id=cn.id,
+            )
         cn.status = VendorCredit.Status.POSTED
         cn.number = next_document_number(org, "vendor_credit", "VC-")
         cn.journal = posted

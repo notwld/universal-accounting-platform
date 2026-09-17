@@ -13,4 +13,4 @@ pytest-django>=4.8
 svix>=1.30
 gunicorn>=22.0
 uvicorn[standard]>=0.30
-drf-spectacular>=0.27
+xlrd>=2.0.1,<3

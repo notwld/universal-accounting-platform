@@ -1,11 +1,15 @@
 from apps.finance.models.config import (
     Account,
+    ApprovalAction,
     Currency,
     DocumentSequence,
+    FinanceException,
     FinanceGrant,
     FinanceRole,
     FinanceSettings,
     FiscalPeriodLock,
+    ReportingTag,
+    SavedFilter,
 )
 from apps.finance.models.ledger import FinanceAuditEvent, FinanceIdempotency, JournalEntry, JournalLine
 from apps.finance.models.sales import (
@@ -40,12 +44,17 @@ from apps.finance.models.purchases import (
     VendorRefund,
 )
 from apps.finance.models.attachments import FinanceAttachment
-from apps.finance.models.banking import BankLine, BankReconciliation, BankRule, BankStatement
+from apps.finance.models.banking import BankFeed, BankLine, BankReconciliation, BankRule, BankStatement
 from apps.finance.models.recurring import Reminder, ReminderRule, RecurringOccurrence, RecurringSchedule
+from apps.finance.models.stock import StockBalance, StockMove, Warehouse
+from apps.finance.models.assets import AssetCharge, FixedAsset
 
 __all__ = [
     "Account",
     "Allocation",
+    "ApprovalAction",
+    "AssetCharge",
+    "BankFeed",
     "BankLine",
     "BankReconciliation",
     "BankRule",
@@ -63,11 +72,13 @@ __all__ = [
     "ExchangeRate",
     "FinanceAttachment",
     "FinanceAuditEvent",
+    "FinanceException",
     "FinanceGrant",
     "FinanceIdempotency",
     "FinanceRole",
     "FinanceSettings",
     "FiscalPeriodLock",
+    "FixedAsset",
     "Invoice",
     "InvoiceLine",
     "Item",
@@ -86,9 +97,14 @@ __all__ = [
     "RecurringSchedule",
     "Reminder",
     "ReminderRule",
+    "ReportingTag",
+    "SavedFilter",
+    "StockBalance",
+    "StockMove",
     "TaxRate",
     "VendorCredit",
     "VendorCreditLine",
     "VendorPayment",
     "VendorRefund",
+    "Warehouse",
 ]

@@ -91,6 +91,8 @@ def upsert_settings(*, org: Organization, payload: dict) -> FinanceSettings:
         ("fx_loss_account_id", "fx_loss_account_id"),
         ("ap_account_id", "ap_account_id"),
         ("vendor_advance_account_id", "vendor_advance_account_id"),
+        ("inventory_account_id", "inventory_account_id"),
+        ("cogs_account_id", "cogs_account_id"),
     ):
         if payload.get(key):
             acc = Account.objects.filter(id=payload[key], organization=org).first()
@@ -101,6 +103,21 @@ def upsert_settings(*, org: Organization, payload: dict) -> FinanceSettings:
         defaults["require_document_approval"] = bool(payload.get("require_document_approval"))
     if "allow_self_approve" in payload:
         defaults["allow_self_approve"] = bool(payload.get("allow_self_approve"))
+    if "approval_threshold" in payload:
+        try:
+            from decimal import Decimal
+
+            defaults["approval_threshold"] = Decimal(str(payload.get("approval_threshold") or 0))
+        except Exception as exc:
+            raise AuthAPIError("validation_error", "Invalid approval_threshold") from exc
+    if "approval_levels" in payload:
+        try:
+            levels = int(payload.get("approval_levels") or 1)
+        except (TypeError, ValueError) as exc:
+            raise AuthAPIError("validation_error", "Invalid approval_levels") from exc
+        if levels < 1:
+            raise AuthAPIError("validation_error", "approval_levels must be at least 1")
+        defaults["approval_levels"] = levels
     settings, _ = FinanceSettings.objects.update_or_create(organization=org, defaults=defaults)
     DocumentSequence.objects.get_or_create(
         organization=org,

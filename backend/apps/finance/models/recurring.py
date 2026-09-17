@@ -78,6 +78,7 @@ class Reminder(models.Model):
     object_id = models.CharField(max_length=36)
     due_date = models.DateField()
     as_of = models.DateField()
+    emailed_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         db_table = "finance_reminder"

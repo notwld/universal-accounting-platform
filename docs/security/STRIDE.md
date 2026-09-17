@@ -34,7 +34,7 @@
 
 ## SMTP (gap fill)
 
-Clerk owns verification/OTP mail. Django SMTP is **only** for application security notifications (new session, context switch alerts). Always TLS; credentials from env/secret manager.
+Django SMTP is for application security notifications (new session, context switch alerts) **and** finance reminder mail to contact addresses. Always TLS; credentials from env/secret manager. Clerk still owns verification/OTP mail.
 
 ## CORS (gap fill)
 

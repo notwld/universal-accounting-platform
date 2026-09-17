@@ -63,6 +63,7 @@ def _journal_payload(journal: JournalEntry) -> dict:
             "description": line.description,
             "debit": _dec(line.debit),
             "credit": _dec(line.credit),
+            "tag_id": line.tag_id,
         }
         for line in journal.lines.all()
     ]
@@ -156,8 +157,12 @@ def _settings_payload(settings: FinanceSettings) -> dict:
         "fx_loss_account_id": settings.fx_loss_account_id,
         "ap_account_id": settings.ap_account_id,
         "vendor_advance_account_id": settings.vendor_advance_account_id,
+        "inventory_account_id": settings.inventory_account_id,
+        "cogs_account_id": settings.cogs_account_id,
         "require_document_approval": settings.require_document_approval,
         "allow_self_approve": settings.allow_self_approve,
+        "approval_threshold": str(settings.approval_threshold),
+        "approval_levels": settings.approval_levels,
     }
 
 
@@ -283,6 +288,7 @@ class AccountListCreateView(APIView):
             classification=request.data.get("classification"),
             is_control=bool(request.data.get("is_control")),
             control_kind=request.data.get("control_kind") or "",
+            cashflow_kind=request.data.get("cashflow_kind") or "",
         )
         return envelope_success(request, _account_payload(account), http_status=201)
 
@@ -298,7 +304,7 @@ class AccountDetailView(APIView):
             raise AuthAPIError("cross_organization", "Account not found")
         if request.data.get("version") is not None and int(request.data["version"]) != account.version:
             raise AuthAPIError("stale_version", "Account version mismatch")
-        for field in ("code", "name", "classification", "control_kind", "status"):
+        for field in ("code", "name", "classification", "control_kind", "cashflow_kind", "status"):
             if field in request.data:
                 setattr(account, field, request.data[field])
         if "is_control" in request.data:
@@ -316,6 +322,7 @@ def _account_payload(account: Account) -> dict:
         "classification": account.classification,
         "is_control": account.is_control,
         "control_kind": account.control_kind,
+        "cashflow_kind": account.cashflow_kind,
         "status": account.status,
         "version": account.version,
     }
@@ -515,7 +522,8 @@ class TrialBalanceView(APIView):
         if not start or not end:
             raise AuthAPIError("validation_error", "from and to are required")
         rows = report_selectors.trial_balance(
-            org=org, start=start, end=end, exponent=settings.base_currency.exponent
+            org=org, start=start, end=end, exponent=settings.base_currency.exponent,
+            tag_id=request.query_params.get("tag_id"),
         )
         return envelope_success(request, {"items": rows})
 
@@ -531,7 +539,8 @@ class GeneralLedgerView(APIView):
         if not start or not end:
             raise AuthAPIError("validation_error", "from and to are required")
         rows = report_selectors.general_ledger(
-            org=org, start=start, end=end, account_id=request.query_params.get("account_id")
+            org=org, start=start, end=end, account_id=request.query_params.get("account_id"),
+            tag_id=request.query_params.get("tag_id"),
         )
         return envelope_success(request, {"items": rows})
 
@@ -549,12 +558,19 @@ class ProfitLossView(APIView):
         end = request.query_params.get("to")
         if not start or not end:
             raise AuthAPIError("validation_error", "from and to are required")
-        return envelope_success(
-            request,
-            report_selectors.profit_loss(
-                org=org, start=start, end=end, exponent=settings.base_currency.exponent
-            ),
+        data = report_selectors.profit_loss(
+            org=org, start=start, end=end, exponent=settings.base_currency.exponent,
+            tag_id=request.query_params.get("tag_id"),
         )
+        if request.query_params.get("compare_from") and request.query_params.get("compare_to"):
+            data["prior"] = report_selectors.profit_loss(
+                org=org,
+                start=request.query_params["compare_from"],
+                end=request.query_params["compare_to"],
+                exponent=settings.base_currency.exponent,
+                tag_id=request.query_params.get("tag_id"),
+            )
+        return envelope_success(request, data)
 
 
 class BalanceSheetView(APIView):
@@ -569,7 +585,28 @@ class BalanceSheetView(APIView):
         as_of = request.query_params.get("as_of")
         if not as_of:
             raise AuthAPIError("validation_error", "as_of is required")
+        data = report_selectors.balance_sheet(org=org, as_of=as_of, exponent=settings.base_currency.exponent)
+        if request.query_params.get("compare_as_of"):
+            data["prior"] = report_selectors.balance_sheet(
+                org=org, as_of=request.query_params["compare_as_of"], exponent=settings.base_currency.exponent
+            )
+        return envelope_success(request, data)
+
+
+class CashFlowView(APIView):
+    permission_classes = [IsApplicationUser]
+
+    @extend_schema(tags=["Finance"], parameters=[ORG_HEADER])
+    def get(self, request):
+        _, org = _org_action(request, "finance.report.view")
+        settings = FinanceSettings.objects.select_related("base_currency").filter(organization=org).first()
+        if not settings:
+            raise AuthAPIError("validation_error", "Finance setup is incomplete")
+        start = request.query_params.get("from")
+        end = request.query_params.get("to")
+        if not start or not end:
+            raise AuthAPIError("validation_error", "from and to are required")
         return envelope_success(
             request,
-            report_selectors.balance_sheet(org=org, as_of=as_of, exponent=settings.base_currency.exponent),
+            report_selectors.cash_flow(org=org, start=start, end=end, exponent=settings.base_currency.exponent),
         )

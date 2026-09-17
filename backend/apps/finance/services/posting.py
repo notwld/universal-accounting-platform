@@ -14,6 +14,7 @@ from apps.finance.models import (
     FiscalPeriodLock,
     JournalEntry,
     JournalLine,
+    ReportingTag,
 )
 from apps.finance.services.context import finance_tx
 from apps.finance.services.money import quantize_amount
@@ -75,6 +76,7 @@ CONTROL_SOURCES = {
     JournalEntry.Source.VENDOR_PAYMENT,
     JournalEntry.Source.VENDOR_CREDIT,
     JournalEntry.Source.VENDOR_REFUND,
+    JournalEntry.Source.ASSET,
 }
 
 
@@ -126,6 +128,11 @@ def replace_draft_lines(journal, lines_payload):
             debit=Decimal(str(raw.get("debit") or 0)),
             credit=Decimal(str(raw.get("credit") or 0)),
         )
+        tag_id = raw.get("tag_id")
+        if tag_id:
+            if not ReportingTag.objects.filter(id=tag_id, organization=org).exists():
+                raise AuthAPIError("cross_organization", "Tag not found")
+            line.tag_id = tag_id
         _prepare_line(org, journal.source_type, line, exponent)
         stubs.append(line)
     JournalLine.objects.bulk_create(stubs)

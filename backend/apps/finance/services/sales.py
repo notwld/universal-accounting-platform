@@ -22,6 +22,7 @@ from apps.finance.services.context import finance_tx
 from apps.finance.services.money import quantize_amount
 from apps.finance.services.posting import post_generated
 from apps.finance.services.sequence import next_document_number
+from apps.finance.services.stock import issue_line, reverse_moves
 from apps.finance.services.tax import line_tax
 
 
@@ -176,6 +177,21 @@ def post_invoice(*, user_id, org, invoice, idempotency_key, skip_approval=False)
             for line in inv.lines.all()
         ]
         gl, _, _ = _preview_or_snapshot_invoice(inv, persist=False)
+        settings = _settings(org)
+        for line in inv.lines.select_related("item"):
+            cogs = issue_line(
+                org=org,
+                item=line.item,
+                qty=line.quantity,
+                source_type="invoice",
+                source_id=inv.id,
+                entry_date=inv.entry_date,
+            )
+            if cogs:
+                if not settings.cogs_account_id or not settings.inventory_account_id:
+                    raise AuthAPIError("validation_error", "Inventory and COGS accounts are required")
+                gl.append({"account_id": settings.cogs_account_id, "debit": str(cogs), "credit": "0", "description": "COGS"})
+                gl.append({"account_id": settings.inventory_account_id, "debit": "0", "credit": str(cogs), "description": "inventory"})
         posted = post_generated(
             user_id=user_id,
             org=org,
@@ -237,6 +253,20 @@ def post_credit(*, user_id, org, credit: CreditNote, idempotency_key):
             gl.append({"account_id": line.income_account_id, "debit": str(line.base_net), "credit": "0", "description": line.description})
             if line.base_tax and line.tax_payable_account_id:
                 gl.append({"account_id": line.tax_payable_account_id, "debit": str(line.base_tax), "credit": "0", "description": "tax"})
+        if cn.invoice_id:
+            restored = reverse_moves(
+                org=org,
+                source_type="invoice",
+                source_id=cn.invoice_id,
+                entry_date=cn.entry_date,
+                new_source_type="credit",
+                new_source_id=cn.id,
+            )
+            if restored:
+                if not settings.inventory_account_id or not settings.cogs_account_id:
+                    raise AuthAPIError("validation_error", "Inventory and COGS accounts are required")
+                gl.append({"account_id": settings.inventory_account_id, "debit": str(restored), "credit": "0", "description": "inventory"})
+                gl.append({"account_id": settings.cogs_account_id, "debit": "0", "credit": str(restored), "description": "COGS"})
         posted = post_generated(
             user_id=user_id, org=org, entry_date=cn.entry_date, source_type=JournalEntry.Source.CREDIT,
             memo="credit", gl_lines=gl, idempotency_key=idempotency_key, body={"credit_id": cn.id},

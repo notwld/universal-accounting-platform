@@ -1,12 +1,12 @@
 ---
-description: Do not add extra bank statement formats or feeds until a real bank requires them.
+description: Bank statement import formats and file feeds.
 alwaysApply: true
 ---
 
 # Bank statement formats
 
-Statement import is **CSV and XLSX** only (`date`, `amount`, `description`).
+Statement import accepts **CSV, XLSX, XLS, OFX, and QIF**, all parsed into the same bank-line rows (`date`, `amount`, `description`). Feeds are HTTPS file URLs of those formats.
 
-Do **not** add `.xls`, OFX, QIF, or live bank feeds unless a named bank/provider actually sends that format and the user asks to support that bank. Until then, extra parsers and feed clients are speculative.
+Do **not** add Plaid, TrueLayer, Yodlee, or other live open-banking clients until a named provider is chosen. A file URL is not a card-network feed.
 
-When adding a format: parse into the same bank-line rows as CSV/XLSX; do not invent a second matching engine.
+When adding a format: parse into the same bank-line rows; do not invent a second matching engine.

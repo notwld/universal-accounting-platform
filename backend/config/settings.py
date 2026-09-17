@@ -293,6 +293,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "apps.finance.tasks.run_due_reminders",
         "schedule": crontab(minute=30, hour=1),
     },
+    "finance-feed-run": {
+        "task": "apps.finance.tasks.run_due_feeds",
+        "schedule": crontab(minute=45, hour=2),
+    },
 }
 
 # ---------------------------------------------------------------------------

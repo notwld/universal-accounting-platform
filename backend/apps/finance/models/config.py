@@ -68,8 +68,16 @@ class FinanceSettings(models.Model):
     vendor_advance_account = models.ForeignKey(
         "finance.Account", null=True, blank=True, on_delete=models.PROTECT, related_name="+"
     )
+    inventory_account = models.ForeignKey(
+        "finance.Account", null=True, blank=True, on_delete=models.PROTECT, related_name="+"
+    )
+    cogs_account = models.ForeignKey(
+        "finance.Account", null=True, blank=True, on_delete=models.PROTECT, related_name="+"
+    )
     require_document_approval = models.BooleanField(default=False)
     allow_self_approve = models.BooleanField(default=False)
+    approval_threshold = models.DecimalField(max_digits=20, decimal_places=8, default=0)
+    approval_levels = models.PositiveSmallIntegerField(default=1)
 
     class Meta:
         db_table = "finance_settings"
@@ -130,6 +138,7 @@ class Account(models.Model):
     classification = models.CharField(max_length=16, choices=Classification.choices)
     is_control = models.BooleanField(default=False)
     control_kind = models.CharField(max_length=8, blank=True, default="")
+    cashflow_kind = models.CharField(max_length=16, blank=True, default="")
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.ACTIVE)
     version = models.PositiveIntegerField(default=1)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -182,3 +191,67 @@ class FiscalPeriodLock(models.Model):
 
     class Meta:
         db_table = "finance_period_lock"
+
+
+class ReportingTag(models.Model):
+    id = models.CharField(primary_key=True, max_length=36, default=new_uuid, editable=False)
+    organization = models.ForeignKey("tenancy.Organization", on_delete=models.PROTECT)
+    name = models.CharField(max_length=100)
+
+    class Meta:
+        db_table = "finance_reporting_tag"
+        constraints = [
+            models.UniqueConstraint(fields=["organization", "name"], name="uniq_finance_reporting_tag")
+        ]
+
+
+class SavedFilter(models.Model):
+    id = models.CharField(primary_key=True, max_length=36, default=new_uuid, editable=False)
+    organization = models.ForeignKey("tenancy.Organization", on_delete=models.PROTECT)
+    name = models.CharField(max_length=100)
+    resource = models.CharField(max_length=32)
+    params = models.JSONField(default=dict)
+
+    class Meta:
+        db_table = "finance_saved_filter"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "resource", "name"], name="uniq_finance_saved_filter"
+            )
+        ]
+
+
+class FinanceException(models.Model):
+    class Status(models.TextChoices):
+        OPEN = "open"
+        RESOLVED = "resolved"
+
+    id = models.CharField(primary_key=True, max_length=36, default=new_uuid, editable=False)
+    organization = models.ForeignKey("tenancy.Organization", on_delete=models.PROTECT)
+    kind = models.CharField(max_length=64)
+    object_type = models.CharField(max_length=32, blank=True, default="")
+    object_id = models.CharField(max_length=36, blank=True, default="")
+    reason = models.TextField(blank=True, default="")
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.OPEN)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "finance_exception"
+
+
+class ApprovalAction(models.Model):
+    id = models.CharField(primary_key=True, max_length=36, default=new_uuid, editable=False)
+    organization = models.ForeignKey("tenancy.Organization", on_delete=models.PROTECT)
+    object_type = models.CharField(max_length=16)
+    object_id = models.CharField(max_length=36)
+    actor_user_id = models.CharField(max_length=36)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "finance_approval_action"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["object_type", "object_id", "actor_user_id"],
+                name="uniq_finance_approval_action",
+            )
+        ]

@@ -276,3 +276,63 @@ DROP POLICY IF EXISTS finance_bank_rule_isolation ON finance_bank_rule;
 CREATE POLICY finance_bank_rule_isolation ON finance_bank_rule
   USING (organization_id = current_setting('app.organization_id', true))
   WITH CHECK (organization_id = current_setting('app.organization_id', true));
+
+ALTER TABLE finance_bank_feed ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS finance_bank_feed_isolation ON finance_bank_feed;
+CREATE POLICY finance_bank_feed_isolation ON finance_bank_feed
+  USING (organization_id = current_setting('app.organization_id', true))
+  WITH CHECK (organization_id = current_setting('app.organization_id', true));
+
+ALTER TABLE finance_saved_filter ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS finance_saved_filter_isolation ON finance_saved_filter;
+CREATE POLICY finance_saved_filter_isolation ON finance_saved_filter
+  USING (organization_id = current_setting('app.organization_id', true))
+  WITH CHECK (organization_id = current_setting('app.organization_id', true));
+
+ALTER TABLE finance_exception ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS finance_exception_isolation ON finance_exception;
+CREATE POLICY finance_exception_isolation ON finance_exception
+  USING (organization_id = current_setting('app.organization_id', true))
+  WITH CHECK (organization_id = current_setting('app.organization_id', true));
+
+ALTER TABLE finance_approval_action ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS finance_approval_action_isolation ON finance_approval_action;
+CREATE POLICY finance_approval_action_isolation ON finance_approval_action
+  USING (organization_id = current_setting('app.organization_id', true))
+  WITH CHECK (organization_id = current_setting('app.organization_id', true));
+
+ALTER TABLE finance_warehouse ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS finance_warehouse_isolation ON finance_warehouse;
+CREATE POLICY finance_warehouse_isolation ON finance_warehouse
+  USING (organization_id = current_setting('app.organization_id', true))
+  WITH CHECK (organization_id = current_setting('app.organization_id', true));
+
+ALTER TABLE finance_stock_balance ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS finance_stock_balance_isolation ON finance_stock_balance;
+CREATE POLICY finance_stock_balance_isolation ON finance_stock_balance
+  USING (organization_id = current_setting('app.organization_id', true))
+  WITH CHECK (organization_id = current_setting('app.organization_id', true));
+
+ALTER TABLE finance_stock_move ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS finance_stock_move_isolation ON finance_stock_move;
+CREATE POLICY finance_stock_move_isolation ON finance_stock_move
+  USING (organization_id = current_setting('app.organization_id', true))
+  WITH CHECK (organization_id = current_setting('app.organization_id', true));
+
+ALTER TABLE finance_fixed_asset ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS finance_fixed_asset_isolation ON finance_fixed_asset;
+CREATE POLICY finance_fixed_asset_isolation ON finance_fixed_asset
+  USING (organization_id = current_setting('app.organization_id', true))
+  WITH CHECK (organization_id = current_setting('app.organization_id', true));
+
+ALTER TABLE finance_asset_charge ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS finance_asset_charge_isolation ON finance_asset_charge;
+CREATE POLICY finance_asset_charge_isolation ON finance_asset_charge
+  USING (organization_id = current_setting('app.organization_id', true))
+  WITH CHECK (organization_id = current_setting('app.organization_id', true));
+
+ALTER TABLE finance_reporting_tag ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS finance_reporting_tag_isolation ON finance_reporting_tag;
+CREATE POLICY finance_reporting_tag_isolation ON finance_reporting_tag
+  USING (organization_id = current_setting('app.organization_id', true))
+  WITH CHECK (organization_id = current_setting('app.organization_id', true));

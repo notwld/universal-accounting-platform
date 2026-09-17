@@ -4,6 +4,7 @@ from apps.finance.api.views import (
     AccountDetailView,
     AccountListCreateView,
     BalanceSheetView,
+    CashFlowView,
     GeneralLedgerView,
     GrantDetailView,
     GrantListView,
@@ -19,11 +20,31 @@ from apps.finance.api.views import (
     SettingsView,
     TrialBalanceView,
 )
+from apps.finance.api.asset_views import (
+    AssetDepreciateView,
+    AssetDisposeView,
+    AssetListCreateView,
+    AssetRegisterView,
+    AssetWriteDownView,
+)
+from apps.finance.api.stock_views import (
+    InventoryValuationView,
+    StockAdjustView,
+    StockBalanceListView,
+    StockTransferView,
+    WarehouseListCreateView,
+)
 
 from apps.finance.api.reminder_views import (
     ReminderListView,
     ReminderRunView,
     ReminderRuleListCreateView,
+)
+from apps.finance.api.workflow_views import (
+    ExceptionListView,
+    ExceptionResolveView,
+    SavedFilterListCreateView,
+    TagListCreateView,
 )
 from apps.finance.api.recurring_views import (
     RecurringListCreateView,
@@ -32,6 +53,8 @@ from apps.finance.api.recurring_views import (
     RecurringRunView,
 )
 from apps.finance.api.bank_views import (
+    BankFeedFetchView,
+    BankFeedListCreateView,
     BankLineCategorizeView,
     BankLineListView,
     BankLineMatchView,
@@ -100,6 +123,9 @@ urlpatterns = [
     path("reports/general-ledger", GeneralLedgerView.as_view(), name="finance-general-ledger"),
     path("reports/profit-loss", ProfitLossView.as_view(), name="finance-profit-loss"),
     path("reports/balance-sheet", BalanceSheetView.as_view(), name="finance-balance-sheet"),
+    path("reports/cash-flow", CashFlowView.as_view(), name="finance-cash-flow"),
+    path("reports/inventory-valuation", InventoryValuationView.as_view(), name="finance-inventory-valuation"),
+    path("reports/asset-register", AssetRegisterView.as_view(), name="finance-asset-register"),
     path("reports/ar-aging", ARAgingView.as_view(), name="finance-ar-aging"),
     path("reports/ap-aging", APAgingView.as_view(), name="finance-ap-aging"),
     path("contacts", ContactListCreateView.as_view(), name="finance-contacts"),
@@ -144,6 +170,8 @@ urlpatterns = [
     path("bank-rules", BankRuleListCreateView.as_view(), name="finance-bank-rules"),
     path("bank-rules/apply", BankRuleApplyView.as_view(), name="finance-bank-rules-apply"),
     path("bank-rules/<str:rule_id>", BankRuleDetailView.as_view(), name="finance-bank-rule-detail"),
+    path("bank-feeds", BankFeedListCreateView.as_view(), name="finance-bank-feeds"),
+    path("bank-feeds/<str:feed_id>/fetch", BankFeedFetchView.as_view(), name="finance-bank-feed-fetch"),
     path("recurring", RecurringListCreateView.as_view(), name="finance-recurring"),
     path("recurring/run", RecurringRunView.as_view(), name="finance-recurring-run"),
     path("recurring/<str:schedule_id>/pause", RecurringPauseView.as_view(), name="finance-recurring-pause"),
@@ -151,4 +179,16 @@ urlpatterns = [
     path("reminder-rules", ReminderRuleListCreateView.as_view(), name="finance-reminder-rules"),
     path("reminders", ReminderListView.as_view(), name="finance-reminders"),
     path("reminders/run", ReminderRunView.as_view(), name="finance-reminders-run"),
+    path("saved-filters", SavedFilterListCreateView.as_view(), name="finance-saved-filters"),
+    path("tags", TagListCreateView.as_view(), name="finance-tags"),
+    path("exceptions", ExceptionListView.as_view(), name="finance-exceptions"),
+    path("exceptions/<str:exception_id>/resolve", ExceptionResolveView.as_view(), name="finance-exception-resolve"),
+    path("warehouses", WarehouseListCreateView.as_view(), name="finance-warehouses"),
+    path("stock/balances", StockBalanceListView.as_view(), name="finance-stock-balances"),
+    path("stock/adjust", StockAdjustView.as_view(), name="finance-stock-adjust"),
+    path("stock/transfer", StockTransferView.as_view(), name="finance-stock-transfer"),
+    path("assets/depreciate", AssetDepreciateView.as_view(), name="finance-asset-depreciate"),
+    path("assets", AssetListCreateView.as_view(), name="finance-assets"),
+    path("assets/<str:asset_id>/write-down", AssetWriteDownView.as_view(), name="finance-asset-write-down"),
+    path("assets/<str:asset_id>/dispose", AssetDisposeView.as_view(), name="finance-asset-dispose"),
 ]

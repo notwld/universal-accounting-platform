@@ -1,17 +1,25 @@
 import csv
 import hashlib
 import io
+import ipaddress
+import re
+import socket
 import zipfile
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
+from urllib.parse import urlparse
 from xml.etree import ElementTree as ET
 
+import httpx
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError, transaction
 from django.db.models import Sum
+from django.utils import timezone
 
 from apps.authentication.exceptions import AuthAPIError
 from apps.finance.models import (
     Account,
+    BankFeed,
     BankLine,
     BankReconciliation,
     BankRule,
@@ -25,6 +33,7 @@ from apps.finance.models import (
 from apps.finance.services.context import finance_tx
 from apps.finance.services.money import quantize_amount
 from apps.finance.services.posting import post_generated
+from apps.finance.services.workflow import parse_optional_decimal, record_exception
 
 
 def _as_date(value) -> date:
@@ -170,14 +179,119 @@ def _parse_xlsx(raw: bytes, exponent: int):
     return _coerce_rows(dicts, exponent)
 
 
+def _parse_qif_date(value) -> date:
+    s = str(value).strip()
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y", "%m/%d/%y", "%d/%m/%y"):
+        try:
+            return datetime.strptime(s[:10], fmt).date()
+        except ValueError:
+            continue
+    return _parse_date(s)
+
+
+def _parse_ofx(raw, exponent: int):
+    text = raw.decode("utf-8", errors="replace") if isinstance(raw, (bytes, bytearray)) else raw
+    blocks = re.findall(r"<STMTTRN>(.*?)</STMTTRN>", text, flags=re.I | re.S)
+    if not blocks:
+        parts = re.split(r"<STMTTRN>", text, flags=re.I)[1:]
+        blocks = [re.split(r"<STMTTRN>", p, flags=re.I)[0] for p in parts]
+    dicts = []
+    for block in blocks:
+        amt = re.search(r"<TRNAMT>\s*([^<\s]+)", block, flags=re.I)
+        posted = re.search(r"<DTPOSTED>\s*([^<\s]+)", block, flags=re.I)
+        memo = re.search(r"<(?:MEMO|NAME)>\s*([^<\r\n]+)", block, flags=re.I)
+        if not amt or not posted:
+            continue
+        digits = re.sub(r"[^0-9]", "", posted.group(1))[:8]
+        dicts.append(
+            {
+                "date": f"{digits[:4]}-{digits[4:6]}-{digits[6:8]}",
+                "amount": amt.group(1).strip(),
+                "description": (memo.group(1).strip() if memo else "")[:255],
+            }
+        )
+    if not dicts:
+        raise AuthAPIError("validation_error", "OFX has no transactions")
+    return _coerce_rows(dicts, exponent)
+
+
+def _parse_qif(raw, exponent: int):
+    text = raw.decode("utf-8", errors="replace") if isinstance(raw, (bytes, bytearray)) else raw
+    dicts = []
+    cur = {}
+    for line in text.splitlines():
+        if not line:
+            continue
+        code, rest = line[0], line[1:].strip()
+        if code == "D":
+            cur["date"] = _parse_qif_date(rest).isoformat()
+        elif code == "T" or code == "U":
+            cur["amount"] = rest.replace("(", "-").replace(")", "")
+        elif code in ("P", "M"):
+            cur["description"] = rest[:255]
+        elif code == "^":
+            if "date" in cur and "amount" in cur:
+                cur.setdefault("description", "")
+                dicts.append(cur)
+            cur = {}
+    if "date" in cur and "amount" in cur:
+        cur.setdefault("description", "")
+        dicts.append(cur)
+    if not dicts:
+        raise AuthAPIError("validation_error", "QIF has no transactions")
+    return _coerce_rows(dicts, exponent)
+
+
+def _rows_from_table(table, exponent: int):
+    header_idx = next((i for i, row in enumerate(table) if any(str(c).strip() for c in row)), None)
+    if header_idx is None:
+        raise AuthAPIError("validation_error", "Statement has no header")
+    fields = _header_map(table[header_idx])
+    key_to_col = {k: table[header_idx].index(fields[k]) for k in ("date", "amount", "description")}
+    dicts = []
+    for row in table[header_idx + 1 :]:
+        dicts.append({k: row[idx] if idx < len(row) else "" for k, idx in key_to_col.items()})
+    return _coerce_rows(dicts, exponent)
+
+
+def _parse_xls(raw, exponent: int):
+    if not isinstance(raw, (bytes, bytearray)):
+        raw = raw.encode()
+    try:
+        import xlrd
+        wb = xlrd.open_workbook(file_contents=bytes(raw))
+        sheet = wb.sheet_by_index(0)
+        table = []
+        for r in range(sheet.nrows):
+            row = []
+            for c in range(sheet.ncols):
+                cell = sheet.cell(r, c)
+                if cell.ctype == xlrd.XL_CELL_DATE:
+                    row.append(xlrd.xldate_as_datetime(cell.value, wb.datemode).date().isoformat())
+                else:
+                    row.append(cell.value)
+            table.append(row)
+        return _rows_from_table(table, exponent)
+    except Exception as exc:
+        raise AuthAPIError("validation_error", "Invalid spreadsheet") from exc
+
+
 def _parse_statement(file_obj, exponent: int):
     raw = file_obj.read()
     name = (getattr(file_obj, "name", "") or "").lower()
-    xlsx = name.endswith(".xlsx") or (isinstance(raw, bytes) and raw[:2] == b"PK")
+    sample = raw[:64] if isinstance(raw, (bytes, bytearray)) else str(raw)[:64].encode()
+    text_head = sample.decode("utf-8", errors="ignore").lstrip()
+    if name.endswith(".ofx") or name.endswith(".qfx") or b"OFXHEADER" in sample.upper() or "<OFX" in text_head.upper():
+        return _parse_ofx(raw, exponent)
+    if name.endswith(".qif") or text_head.startswith("!Type"):
+        return _parse_qif(raw, exponent)
+    xlsx = name.endswith(".xlsx") or sample[:2] == b"PK"
     if xlsx:
         if isinstance(raw, str):
             raw = raw.encode()
         return _parse_xlsx(raw, exponent)
+    if name.endswith(".xls") or sample[:4] == b"\xd0\xcf\x11\xe0":
+        return _parse_xls(raw, exponent)
     return _parse_csv_bytes(raw, exponent)
 
 
@@ -214,7 +328,8 @@ def import_statement(*, user_id, org, account_id, uploaded):
             object_id=statement.id,
             payload={"created": len(created), "duplicates": len(duplicates)},
         )
-        return statement, created, duplicates
+    categorized = apply_bank_rules(user_id=user_id, org=org, account_id=account.id) if created else []
+    return statement, created, duplicates, categorized
 
 
 def match_line(*, user_id, org, line_id, customer_payment_id=None, vendor_payment_id=None):
@@ -376,19 +491,48 @@ def _rule_account(org, account_id):
 
 
 def _matches(rule: BankRule, line: BankLine) -> bool:
-    if rule.pattern.casefold() not in (line.description or "").casefold():
+    text = line.description or ""
+    if rule.match_kind == BankRule.MatchKind.REGEX:
+        try:
+            if not re.search(rule.pattern, text, flags=re.I):
+                return False
+        except re.error:
+            return False
+    elif rule.pattern.casefold() not in text.casefold():
         return False
     if rule.direction == BankRule.Direction.INFLOW and line.amount <= 0:
         return False
     if rule.direction == BankRule.Direction.OUTFLOW and line.amount >= 0:
         return False
+    if rule.amount_min is not None and line.amount < rule.amount_min:
+        return False
+    if rule.amount_max is not None and line.amount > rule.amount_max:
+        return False
     return True
 
 
-def create_bank_rule(*, user_id, org, payload):
-    pattern = str(payload.get("pattern") or "").strip()
+def _rule_match_fields(payload, rule=None):
+    match_kind = str(payload.get("match_kind") or (rule.match_kind if rule else BankRule.MatchKind.CONTAINS))
+    if match_kind not in BankRule.MatchKind.values:
+        raise AuthAPIError("validation_error", "Invalid match_kind")
+    raw = payload.get("pattern") if "pattern" in payload else (rule.pattern if rule else "")
+    pattern = str(raw or "").strip()
     if not pattern:
         raise AuthAPIError("validation_error", "pattern is required")
+    if match_kind == BankRule.MatchKind.REGEX:
+        try:
+            re.compile(pattern)
+        except re.error as exc:
+            raise AuthAPIError("validation_error", "Invalid regex") from exc
+    amount_min = parse_optional_decimal(payload["amount_min"]) if "amount_min" in payload else (rule.amount_min if rule else None)
+    amount_max = parse_optional_decimal(payload["amount_max"]) if "amount_max" in payload else (rule.amount_max if rule else None)
+    if amount_min is not None and amount_max is not None and amount_min > amount_max:
+        raise AuthAPIError("validation_error", "amount_min cannot exceed amount_max")
+    return pattern[:255], match_kind, amount_min, amount_max
+
+
+def create_bank_rule(*, user_id, org, payload):
+    pattern, match_kind, amount_min, amount_max = _rule_match_fields(payload)
     direction = str(payload.get("direction") or BankRule.Direction.ANY)
     if direction not in BankRule.Direction.values:
         raise AuthAPIError("validation_error", "Invalid direction")
@@ -400,7 +544,10 @@ def create_bank_rule(*, user_id, org, payload):
         account = _rule_account(org, payload.get("account_id"))
         rule = BankRule.objects.create(
             organization=org,
-            pattern=pattern[:255],
+            pattern=pattern,
+            match_kind=match_kind,
+            amount_min=amount_min,
+            amount_max=amount_max,
             account=account,
             direction=direction,
             priority=priority,
@@ -422,12 +569,15 @@ def update_bank_rule(*, user_id, org, rule_id, payload):
         if not rule:
             raise AuthAPIError("cross_organization", "Bank rule not found")
         fields = []
-        if "pattern" in payload:
-            pattern = str(payload.get("pattern") or "").strip()
-            if not pattern:
-                raise AuthAPIError("validation_error", "pattern is required")
-            rule.pattern = pattern[:255]
-            fields.append("pattern")
+        if "pattern" in payload or "match_kind" in payload or "amount_min" in payload or "amount_max" in payload:
+            merged = {
+                "pattern": payload.get("pattern", rule.pattern),
+                "match_kind": payload.get("match_kind", rule.match_kind),
+                "amount_min": payload["amount_min"] if "amount_min" in payload else rule.amount_min,
+                "amount_max": payload["amount_max"] if "amount_max" in payload else rule.amount_max,
+            }
+            rule.pattern, rule.match_kind, rule.amount_min, rule.amount_max = _rule_match_fields(merged, rule)
+            fields.extend(["pattern", "match_kind", "amount_min", "amount_max"])
         if "account_id" in payload:
             rule.account = _rule_account(org, payload.get("account_id"))
             fields.append("account")
@@ -455,6 +605,8 @@ def apply_bank_rules(*, user_id, org, account_id=None):
     categorized = []
     with finance_tx(user_id=user_id, organization_id=org.id):
         rules = list(BankRule.objects.filter(organization=org, active=True).order_by("priority", "id"))
+        if not rules:
+            return []
         qs = BankLine.objects.select_for_update().filter(organization=org, status=BankLine.Status.IMPORTED)
         if account_id:
             qs = qs.filter(account_id=account_id)
@@ -475,7 +627,13 @@ def apply_bank_rules(*, user_id, org, account_id=None):
             except AuthAPIError as exc:
                 if exc.code == "already_matched":
                     continue
-                raise
+                record_exception(
+                    org=org,
+                    kind="bank_rule_apply",
+                    reason=exc.message,
+                    object_type="bank_line",
+                    object_id=line.id,
+                )
         FinanceAuditEvent.objects.create(
             organization=org,
             actor_user_id=user_id,
@@ -485,3 +643,81 @@ def apply_bank_rules(*, user_id, org, account_id=None):
             payload={"categorized": len(categorized)},
         )
         return categorized
+
+
+def _host_blocked(host: str) -> bool:
+    host = (host or "").strip().rstrip(".").lower()
+    if not host or host == "localhost" or host.endswith(".localhost") or host.endswith(".internal"):
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return bool(
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+    )
+
+
+def _safe_feed_url(url: str) -> str:
+    parsed = urlparse(str(url or "").strip())
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise AuthAPIError("validation_error", "Feed URL must be https")
+    if _host_blocked(parsed.hostname):
+        raise AuthAPIError("validation_error", "Feed URL is not allowed")
+    return parsed.geturl()
+
+
+def _http_get_safe(url: str) -> bytes:
+    parsed = urlparse(_safe_feed_url(url))
+    try:
+        infos = socket.getaddrinfo(parsed.hostname, parsed.port or 443, type=socket.SOCK_STREAM)
+    except socket.gaierror as exc:
+        raise AuthAPIError("validation_error", "Feed host could not be resolved") from exc
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified:
+            raise AuthAPIError("validation_error", "Feed URL is not allowed")
+    try:
+        response = httpx.get(parsed.geturl(), timeout=15.0, follow_redirects=False)
+        response.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise AuthAPIError("validation_error", "Feed fetch failed") from exc
+    if len(response.content) > 2_000_000:
+        raise AuthAPIError("validation_error", "Feed file is too large")
+    return response.content
+
+
+def create_bank_feed(*, user_id, org, payload):
+    url = _safe_feed_url(payload.get("url"))
+    with finance_tx(user_id=user_id, organization_id=org.id):
+        account = _bank_account(org, payload.get("account_id"))
+        return BankFeed.objects.create(organization=org, account=account, url=url)
+
+
+def fetch_bank_feed(*, user_id, org, feed_id):
+    with finance_tx(user_id=user_id, organization_id=org.id):
+        feed = BankFeed.objects.select_for_update().filter(id=feed_id, organization=org).first()
+        if not feed or not feed.active:
+            raise AuthAPIError("cross_organization", "Bank feed not found")
+        account_id = feed.account_id
+        url = feed.url
+        name = url.rsplit("/", 1)[-1] or "feed.ofx"
+    try:
+        raw = _http_get_safe(url)
+        uploaded = SimpleUploadedFile(name, raw)
+        statement, created, duplicates, categorized = import_statement(
+            user_id=user_id, org=org, account_id=account_id, uploaded=uploaded
+        )
+        with finance_tx(user_id=user_id, organization_id=org.id):
+            BankFeed.objects.filter(pk=feed_id).update(last_fetched_at=timezone.now(), last_error="")
+        return statement, created, duplicates, categorized
+    except AuthAPIError as exc:
+        with finance_tx(user_id=user_id, organization_id=org.id):
+            BankFeed.objects.filter(pk=feed_id).update(last_error=exc.message[:500])
+            record_exception(org=org, kind="bank_feed_fetch", reason=exc.message, object_type="bank_feed", object_id=feed_id)
+        raise

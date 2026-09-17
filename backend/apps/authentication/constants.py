@@ -49,6 +49,7 @@ ERROR_CATALOGUE = {
     "recon_imbalanced": 422,
     "approval_required": 409,
     "self_approve_forbidden": 403,
+    "negative_stock": 409,
     "validation_error": 422,
     "rate_limit_exceeded": 429,
     "identity_dependency_unavailable": 503,

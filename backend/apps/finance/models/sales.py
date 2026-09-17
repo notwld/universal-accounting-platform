@@ -77,6 +77,7 @@ class Item(models.Model):
         "finance.Account", null=True, blank=True, on_delete=models.PROTECT, related_name="+"
     )
     default_tax = models.ForeignKey(TaxRate, null=True, blank=True, on_delete=models.SET_NULL)
+    tracked = models.BooleanField(default=False)
     status = models.CharField(max_length=16, default="active")
     version = models.PositiveIntegerField(default=1)
 

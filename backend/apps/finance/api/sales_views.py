@@ -46,6 +46,7 @@ class ContactListCreateView(APIView):
         c = Contact.objects.create(
             organization=org,
             name=request.data.get("name"),
+            email=str(request.data.get("email") or "")[:255],
             is_customer=bool(request.data.get("is_customer", not request.data.get("is_vendor"))),
             is_vendor=bool(request.data.get("is_vendor")),
         )
@@ -67,11 +68,12 @@ class ItemListCreateView(APIView):
             organization=org,
             sku=request.data.get("sku"),
             name=request.data.get("name"),
-            kind=request.data.get("kind") or Item.Kind.SERVICE,
+            kind=request.data.get("kind") or (Item.Kind.GOOD if request.data.get("tracked") else Item.Kind.SERVICE),
             unit_price=request.data.get("unit_price") or 0,
             income_account_id=request.data.get("income_account_id"),
             expense_account_id=request.data.get("expense_account_id"),
             default_tax_id=request.data.get("tax_rate_id"),
+            tracked=bool(request.data.get("tracked")),
         )
         return envelope_success(request, _item(i), http_status=201)
 
@@ -187,7 +189,15 @@ class InvoiceListCreateView(APIView):
     @extend_schema(tags=["Finance"], parameters=[ORG_HEADER])
     def get(self, request):
         _, org = _org_action(request, "finance.invoice.create")
-        return envelope_success(request, {"items": [_invoice(i) for i in Invoice.objects.filter(organization=org)]})
+        from apps.finance.services.workflow import apply_saved_filter
+
+        qs = apply_saved_filter(
+            Invoice.objects.filter(organization=org),
+            org=org,
+            resource="invoice",
+            filter_id=request.query_params.get("saved_filter_id"),
+        )
+        return envelope_success(request, {"items": [_invoice(i) for i in qs]})
 
     @extend_schema(tags=["Finance"], parameters=[ORG_HEADER])
     def post(self, request):
@@ -354,12 +364,13 @@ class ARAgingView(APIView):
 
 
 def _contact(c):
-    return {"id": c.id, "name": c.name, "is_customer": c.is_customer, "is_vendor": c.is_vendor, "status": c.status}
+    return {"id": c.id, "name": c.name, "email": c.email, "is_customer": c.is_customer, "is_vendor": c.is_vendor, "status": c.status}
 
 
 def _item(i):
     return {
-        "id": i.id, "sku": i.sku, "name": i.name, "unit_price": str(i.unit_price),
+        "id": i.id, "sku": i.sku, "name": i.name, "kind": i.kind, "tracked": i.tracked,
+        "unit_price": str(i.unit_price),
         "income_account_id": i.income_account_id, "expense_account_id": i.expense_account_id,
     }
 

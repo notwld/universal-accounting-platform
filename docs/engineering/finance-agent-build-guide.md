@@ -142,7 +142,13 @@ Log choices with date, rationale, requirement impact, and decision owner. Routin
 
 Launch countries, bank/payment providers, retention requirements, and deployment capacity are genuine inputs. Work on independent packages while these are unresolved. Do not guess a country's compliance or declare a blocked integration complete. If changing production targets or deleting required scope becomes necessary, present the concrete trade-off and obtain the user's decision.
 
-**Bank files (2026-09-17):** CSV and XLSX statement import is in. Do not add `.xls`, OFX/QIF, or live feeds until a named bank actually sends that format and support is requested. Extra parsers without a sender are speculative.
+**Bank files (2026-09-17):** CSV, XLSX, XLS, OFX, and QIF parse into the same bank-line rows. HTTPS file-URL feeds are supported with SSRF checks. Do not add Plaid/TrueLayer/Yodlee until a named provider is chosen.
+
+**Inventory (2026-09-17):** Tracked goods, warehouses as locations, perpetual moving average, COGS on invoice, document-level credit reversal.
+
+**Fixed assets (2026-09-17):** Register, capitalize, straight-line complete months, write-down, dispose, register NBV ties to cost/accum accounts. No SMS, no live bank clients, no declining-balance/components/tax packs until asked.
+
+**Cash flow / tags (2026-09-17):** Flat journal-line tags; account cash-flow class; indirect cash-flow statement; comparative P&L/BS via extra query params. Year-close posting, FX reval, and report file export deferred.
 
 Task handoff must state: changed files, completed requirement IDs, executed tests and results, migration impact, user-visible outcome, unresolved blockers, and the next dependency-ready task. Keep task status aligned with that evidence.
 
