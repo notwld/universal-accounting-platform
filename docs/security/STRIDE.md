@@ -43,6 +43,22 @@ Clerk owns verification/OTP mail. Django SMTP is **only** for application securi
 - `CSRF_TRUSTED_ORIGINS` for cookie POSTs if added later  
 - `Vary: Origin` via django-cors-headers
 
+## Finance foundation (2026-09-17)
+
+**Scope**: `/api/v1/organizations`, `/api/v1/finance/*` (no UI). Additional trust boundary: client ↔ finance API with `X-Organization-ID`.
+
+| ID | Threat | Asset / Flow | Mitigation |
+|---|---|---|---|
+| S-F1 | Spoofing — forged organization header | Finance reads/writes | Membership + `FinanceGrant` after DRF auth; never middleware-only (`finance/api/views.py` `_org_action`) |
+| T-F1 | Tampering — posted journal edit | Ledger | Service immutability; reverse-only correction; idempotency `(org, operation, key)` |
+| T-F2 | Tampering — over-post / replay | Posting | Idempotency conflict on payload mismatch |
+| R-F1 | Repudiation — grants, post, reverse, close | Audit | `FinanceAuditEvent` append-only |
+| I-F1 | Info disclosure — cross-org | Journals/accounts | Same-org FKs; `cross_organization` closed 404; RLS policies on finance tables |
+| E-F1 | Elevation — self-grant Owner | Access | Step-up JWT freshness; cannot uniquely self-grant owner |
+| E-F2 | Elevation — location membership | Finance | Location never implies `FinanceGrant` |
+
+Residual: table-owner bypass of RLS if the runtime DB role owns finance tables; production must use a non-owner, non-`BYPASSRLS` role. Postgres isolation tests are skipped on SQLite.
+
 ## Residual risk
 
 - Compromised Clerk tenant admin → full IdP takeover (accepted; out of Django control).  

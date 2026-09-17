@@ -1,0 +1,12 @@
+---
+description: Do not add extra bank statement formats or feeds until a real bank requires them.
+alwaysApply: true
+---
+
+# Bank statement formats
+
+Statement import is **CSV and XLSX** only (`date`, `amount`, `description`).
+
+Do **not** add `.xls`, OFX, QIF, or live bank feeds unless a named bank/provider actually sends that format and the user asks to support that bank. Until then, extra parsers and feed clients are speculative.
+
+When adding a format: parse into the same bank-line rows as CSV/XLSX; do not invent a second matching engine.

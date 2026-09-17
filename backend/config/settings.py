@@ -34,6 +34,7 @@ INSTALLED_APPS = [
     "drf_spectacular",
     "apps.tenancy",
     "apps.authentication",
+    "apps.finance",
 ]
 
 MIDDLEWARE = [
@@ -96,6 +97,9 @@ TIME_ZONE = "UTC"
 USE_I18N = True
 USE_TZ = True
 STATIC_URL = "static/"
+MEDIA_URL = "/media/"
+MEDIA_ROOT = BASE_DIR / "media"
+FINANCE_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # ---------------------------------------------------------------------------
@@ -140,6 +144,7 @@ SPECTACULAR_SETTINGS = {
     },
     "TAGS": [
         {"name": "Auth", "description": "Bootstrap, me, context, sessions, security events"},
+        {"name": "Finance", "description": "Organization books, journals, periods, reports"},
         {"name": "Webhooks", "description": "Clerk provider webhooks"},
     ],
 }
@@ -279,6 +284,14 @@ CELERY_BEAT_SCHEDULE = {
     "expire-session-projections": {
         "task": "apps.authentication.tasks.maintenance_tasks.expire_local_session_projection",
         "schedule": crontab(minute=0, hour=4),
+    },
+    "finance-recurring-run": {
+        "task": "apps.finance.tasks.run_due_recurring",
+        "schedule": crontab(minute=15, hour=1),
+    },
+    "finance-reminder-run": {
+        "task": "apps.finance.tasks.run_due_reminders",
+        "schedule": crontab(minute=30, hour=1),
     },
 }
 

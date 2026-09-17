@@ -54,9 +54,10 @@ class ClerkJWTAuthentication(authentication.BaseAuthentication):
         cache_svc = AuthCacheService()
         cached = cache_svc.get_user(clerk_user_id)
         try:
+            user = None
             if cached and cached.get("id"):
                 user = AuthUser.objects.filter(id=cached["id"], deleted_at__isnull=True).first()
-            else:
+            if user is None:
                 user = AuthUser.objects.filter(
                     clerk_user_id=clerk_user_id, deleted_at__isnull=True
                 ).first()
