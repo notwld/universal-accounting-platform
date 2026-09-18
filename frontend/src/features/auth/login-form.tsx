@@ -13,9 +13,11 @@ import { loginSchema, type LoginInput } from "./schema";
 
 export function LoginForm({
   onSubmit,
+  onForgotPassword,
   busy,
 }: {
   onSubmit?: (values: LoginInput) => Promise<void>;
+  onForgotPassword?: () => void;
   busy?: boolean;
 }) {
   const form = useForm<LoginInput>({
@@ -77,6 +79,15 @@ export function LoginForm({
         <div className="grid gap-2">
           <div className="flex items-center justify-between gap-2">
             <Label htmlFor="password">Password</Label>
+            {onForgotPassword && (
+              <button
+                type="button"
+                className="text-xs font-medium text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+                onClick={onForgotPassword}
+              >
+                Forgot password?
+              </button>
+            )}
           </div>
           <PasswordField
             id="password"

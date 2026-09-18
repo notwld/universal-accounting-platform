@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
 import { buttonVariants } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
 import { useBootstrap } from "@/features/auth/use-bootstrap";
 import { useOrg } from "@/stores/org";
 
@@ -25,11 +26,7 @@ export function DashboardHome() {
   }, [isLoaded, isSignedIn, ready, orgId, router]);
 
   if (!isLoaded || isLoading || !isSignedIn || !orgId) {
-    return (
-      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-        Loading…
-      </div>
-    );
+    return <Spinner className="h-full min-h-40" />;
   }
 
   return (
