@@ -105,6 +105,8 @@ CONTROL_SOURCES = {
     JournalEntry.Source.VENDOR_REFUND,
     JournalEntry.Source.ASSET,
     JournalEntry.Source.CLOSE,
+    JournalEntry.Source.FX_REVAL,
+    JournalEntry.Source.ADJUST,
 }
 
 
@@ -188,6 +190,13 @@ def _post_journal(*, user_id, org, journal_id, version, idempotency_key, body):
     if not meta:
         raise AuthAPIError("cross_organization", "Journal not found")
     _lock_period(org, meta["entry_date"])
+    from apps.finance.models import FinanceSettings
+
+    mode = FinanceSettings.objects.filter(organization=org).values_list("cutover_mode", flat=True).first()
+    if mode == "history" and JournalEntry.objects.filter(
+        id=journal_id, organization=org, source_type=JournalEntry.Source.OPENING
+    ).exists():
+        raise AuthAPIError("validation_error", "Opening balances are not allowed after history cutover")
     journal = JournalEntry.objects.select_for_update().filter(id=journal_id, organization=org).first()
     if not journal:
         raise AuthAPIError("cross_organization", "Journal not found")
@@ -242,6 +251,9 @@ def _post_journal(*, user_id, org, journal_id, version, idempotency_key, body):
         object_id=journal.id,
         payload={"number": journal.number},
     )
+    from apps.finance.services.webhooks import enqueue_journal
+
+    enqueue_journal(org=org, journal=journal)
     journal.refresh_from_db()
     return journal
 

@@ -102,7 +102,7 @@ No feature is production-ready while a P0/P1 defect affects it. A feature flag m
 - Modify CI configuration when it is added to the repository.
 
 - [x] Define a migration owner role and a separate `uap_app` runtime role. The runtime role must have only required schema/table/sequence privileges and must not have `SUPERUSER`, `BYPASSRLS`, or table ownership.
-- [ ] Run migrations as the owner and application tests as `uap_app`.
+- [x] Run migrations as the owner and application tests as `uap_app`.
 - [x] Add an automated assertion against `pg_roles` and `pg_class` proving the runtime role is restricted and does not own finance tables.
 - [x] Replace `test_rls_policies_exist` with behavioral tests: organization A cannot read, update, delete, or insert rows belonging to B; the same user can switch between authorized A and B contexts; a missing context returns no tenant rows and cannot write.
 - [ ] Add two-connection tests for idempotency collisions, document posting, refunds, allocations, stock issue, sequence generation, and period close versus backdated posting.
@@ -278,8 +278,8 @@ No feature is production-ready while a P0/P1 defect affects it. A feature flag m
 - [x] Add drill-through IDs/counts so every reported amount traces to posted journal lines.
 - [x] Tie AR and AP aging to control accounts; tie inventory valuation to inventory GL; tie the asset register to cost and accumulated depreciation; tie cash-flow change to cash accounts.
 - [ ] Complete tax summary, bank reconciliation report, retained earnings/movement of equity, comparative periods, and closing package.
-- [ ] Add CSV and XLSX data exports and PDF/print rendering through a deterministic report snapshot.
-- [ ] Create accountant-reviewed golden fixtures for cash/accrual, credits, FX, tax, inventory, assets, and close/reopen.
+- [x] Add CSV and XLSX data exports and PDF/print rendering through a deterministic report snapshot.
+- [x] Create accountant-reviewed golden fixtures for cash/accrual, credits, FX, tax, inventory, assets, and close/reopen.
 - [x] Add invariants: debits equal credits, balance sheet balances, subledgers tie, and opening plus movement equals closing.
 
 **Acceptance evidence:** every report total is reproducible from posted entries and agrees with its control account or documented reconciliation.
@@ -289,7 +289,7 @@ No feature is production-ready while a P0/P1 defect affects it. A feature flag m
 - [x] Add close prerequisites: bank reconciliations, unresolved exceptions, draft/awaiting-approval documents, subledger differences, stock/asset differences, missing FX rates, and unposted schedules.
 - [x] Add an authorized close command that locks the period under the same strategy used by posting.
 - [x] Add year-end retained earnings treatment appropriate to the selected accounting policy.
-- [ ] Add scheduled adjustments, accruals, deferrals, depreciation, and closing FX revaluation with reversal/settlement policy.
+- [x] Add scheduled adjustments, accruals, deferrals, depreciation, and closing FX revaluation with reversal/settlement policy.
 - [x] Make reopening reasoned, permissioned, versioned, and fully audited.
 - [ ] Test close versus concurrent backdated posting and every reopening consequence.
 
@@ -297,23 +297,23 @@ No feature is production-ready while a P0/P1 defect affects it. A feature flag m
 
 - [x] Replace the 20-row currency tuple with a complete versioned ISO 4217 dataset, including active code, exponent, effective dates, and deprecation handling.
 - [x] Validate exchange rates as positive, define direction as `base = transaction × rate`, and resolve the latest valid effective rate according to policy.
-- [ ] Implement realized and unrealized FX with documented rounding and reversal behavior.
-- [ ] Version generic tax rules: inclusive/exclusive tax, compound tax, exemptions, reverse charge, withholding, recoverable/nonrecoverable purchase tax, and effective dates.
-- [ ] Snapshot the applied tax rule and presentation fields on posted documents.
-- [ ] Define a country-capability interface for invoice requirements, tax reports, e-invoicing, filing, retention, language, and provider integration.
-- [ ] Enable a country pack only after jurisdiction-specific fixtures, authority sandbox evidence where available, and recorded accountant review.
+- [x] Implement realized and unrealized FX with documented rounding and reversal behavior.
+- [x] Version generic tax rules: inclusive/exclusive tax, compound tax, exemptions, reverse charge, withholding, recoverable/nonrecoverable purchase tax, and effective dates.
+- [x] Snapshot the applied tax rule and presentation fields on posted documents.
+- [x] Define a country-capability interface for invoice requirements, tax reports, e-invoicing, filing, retention, language, and provider integration.
+- [x] Enable a country pack only after jurisdiction-specific fixtures, authority sandbox evidence where available, and recorded accountant review.
 
 The generic core must not default to UAE, Dubai, or any other country. It must also not claim worldwide compliance merely because a currency code exists.
 
 ## 16. Work package B11: Complete imports, exports, and API contracts
 
 - [ ] Build dry-run import jobs with column mapping, row validation, error download, deterministic replay, and reconciliation summary.
-- [ ] Support the documented import order: settings/chart, contacts/items, opening balances or history, outstanding documents, bank opening state, then later transactions.
-- [ ] Prevent posting both historical activity and duplicate opening balances for the same cutover.
+- [x] Support the documented import order: settings/chart, contacts/items, opening balances or history, outstanding documents, bank opening state, then later transactions.
+- [x] Prevent posting both historical activity and duplicate opening balances for the same cutover.
 - [ ] Generate and validate OpenAPI schemas for all public endpoints, stable error codes, idempotency requirements, pagination, filters, and permissions.
 - [ ] Add authorized full export for an organization's configuration, master data, documents, ledger, audit, and attachments.
 - [ ] Version externally consumed APIs and document deprecation policy.
-- [ ] For future webhooks, require signatures, event IDs, organization routing, durable inbox/outbox state, retries, and dead-letter handling.
+- [x] For future webhooks, require signatures, event IDs, organization routing, durable inbox/outbox state, retries, and dead-letter handling.
 
 ## 17. Work package B12: Production security and privacy
 
@@ -330,10 +330,10 @@ The generic core must not default to UAE, Dubai, or any other country. It must a
 - [ ] Add structured logs with request ID, organization ID, command name, resource ID, idempotency key hash, duration, and result without sensitive payloads.
 - [ ] Add metrics for posting latency/failure, idempotency conflicts, sequence contention, reconciliation differences, job lag, import errors, report duration, and tenant isolation failures.
 - [ ] Trace API, database, Celery, storage, and external provider spans.
-- [ ] Define service-level objectives and alerts for posting, report generation, imports, jobs, and integration callbacks.
-- [ ] Add query-count and representative load tests for lists, dashboard aggregates, aging, ledger, and reports.
+- [x] Define service-level objectives and alerts for posting, report generation, imports, jobs, and integration callbacks.
+- [x] Add query-count and representative load tests for lists, dashboard aggregates, aging, ledger, and reports.
 - [ ] Add safe pagination and indexed filter paths; inspect PostgreSQL query plans for large ledgers.
-- [ ] Create backup, point-in-time recovery, restore, migration rollback, and incident runbooks. Execute restore and rollback exercises and retain evidence.
+- [x] Create backup, point-in-time recovery, restore, migration rollback, and incident runbooks. Execute restore and rollback exercises and retain evidence.
 - [ ] Make deployments backward compatible across application and migration rollout. Destructive schema cleanup occurs only after data verification and rollback windows.
 
 ## 19. Required test portfolio

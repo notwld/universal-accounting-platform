@@ -27,7 +27,7 @@ from apps.finance.services.posting import begin_command, finish_command, post_ge
 from apps.finance.services.resolve import currency_get, org_get, org_get_optional
 from apps.finance.services.sequence import next_document_number
 from apps.finance.services.stock import issue_line, return_qty
-from apps.finance.services.tax import line_tax
+from apps.finance.services.tax import apply_rate
 
 
 def _settings(org) -> FinanceSettings:
@@ -98,10 +98,11 @@ def _preview_or_snapshot_invoice(invoice: Invoice, *, persist: bool):
         tax = None
         tax_id = raw.get("tax_rate_id") or (item.default_tax_id)
         if tax_id:
-            tax = TaxRate.objects.filter(id=tax_id, organization=invoice.organization).first()
-        method = tax.method if tax else "exclusive"
-        rate = tax.rate if tax else Decimal("0")
-        net, tax_amt, line_total = line_tax(amount=ext, rate=rate, method=method, exponent=exponent)
+            tax = TaxRate.objects.select_related("compound_on", "compound_on__compound_on").filter(
+                id=tax_id, organization=invoice.organization
+            ).first()
+        result = apply_rate(tax=tax, amount=ext, exponent=exponent, entry_date=invoice.entry_date)
+        net, tax_amt, line_total = result["net"], result["tax"], result["total"]
         base_net = to_base(net, fx, exponent)
         base_tax = to_base(tax_amt, fx, exponent)
         base_line = to_base(line_total, fx, exponent)
@@ -116,9 +117,11 @@ def _preview_or_snapshot_invoice(invoice: Invoice, *, persist: bool):
                 quantity=qty,
                 unit_price=price,
                 tax_rate_id_snap=tax.id if tax else "",
-                tax_rate_value=rate,
-                tax_method=method,
+                tax_rate_value=Decimal(str((result["components"] or [{}])[-1].get("rate") or 0)) if tax else 0,
+                tax_method=tax.method if tax else "exclusive",
                 tax_name=tax.name if tax else "",
+                tax_kind=result["kind"],
+                tax_components=[{k: (str(v) if k in ("amount", "recoverable", "rate") else v) for k, v in p.items()} for p in result["components"]],
                 net=net,
                 tax_amount=tax_amt,
                 total=line_total,
@@ -128,14 +131,26 @@ def _preview_or_snapshot_invoice(invoice: Invoice, *, persist: bool):
                 income_account=item.income_account,
             )
         gl.append(("income", item.income_account_id, base_net, raw.get("description") or item.name))
-        if tax and base_tax:
-            gl.append(("tax", tax.payable_account_id, base_tax, tax.name))
+        if result["kind"] == "withholding":
+            for part in result["components"]:
+                amt = to_base(part["amount"], fx, exponent)
+                if amt:
+                    gl.append(("wht_recv", part["recoverable_account_id"], amt, part["name"]))
+        elif result["kind"] != "reverse_charge":
+            for part in result["components"]:
+                amt = to_base(part["amount"], fx, exponent)
+                if amt:
+                    gl.append(("tax", part["payable_account_id"], amt, part["name"]))
     require_sales_accounts(settings)
     journal_lines = [
         {"account_id": settings.ar_account_id, "debit": str(base_total), "credit": "0", "description": "AR"}
     ]
     for kind, account_id, amt, desc in gl:
-        if amt:
+        if not amt:
+            continue
+        if kind == "wht_recv":
+            journal_lines.append({"account_id": account_id, "debit": str(amt), "credit": "0", "description": desc})
+        else:
             journal_lines.append(
                 {"account_id": account_id, "debit": "0", "credit": str(amt), "description": desc}
             )

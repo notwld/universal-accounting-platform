@@ -23,6 +23,15 @@ from apps.finance.api.views import (
     EquityMovementView,
     BooksExportView,
 )
+from apps.finance.api.ops_views import (
+    AdjustmentCreateView,
+    AdjustmentReverseView,
+    CutoverView,
+    FxRevalueView,
+    OpsMetricsView,
+    WebhookDeliverView,
+    WebhookListCreateView,
+)
 from apps.finance.api.asset_views import (
     AssetDepreciateView,
     AssetDisposeView,
@@ -106,6 +115,7 @@ from apps.finance.api.sales_views import (
     QuoteListCreateView,
     RefundCreateView,
     TaxRateListCreateView,
+    CountryPackListView,
 )
 
 urlpatterns = [
@@ -130,6 +140,13 @@ urlpatterns = [
     path("reports/tax-summary", TaxSummaryView.as_view(), name="finance-tax-summary"),
     path("reports/equity-movement", EquityMovementView.as_view(), name="finance-equity-movement"),
     path("export", BooksExportView.as_view(), name="finance-export"),
+    path("cutover", CutoverView.as_view(), name="finance-cutover"),
+    path("adjustments", AdjustmentCreateView.as_view(), name="finance-adjustments"),
+    path("adjustments/reverse", AdjustmentReverseView.as_view(), name="finance-adjustments-reverse"),
+    path("fx/revalue", FxRevalueView.as_view(), name="finance-fx-revalue"),
+    path("webhooks", WebhookListCreateView.as_view(), name="finance-webhooks"),
+    path("webhooks/deliver", WebhookDeliverView.as_view(), name="finance-webhooks-deliver"),
+    path("ops/metrics", OpsMetricsView.as_view(), name="finance-ops-metrics"),
     path("reports/inventory-valuation", InventoryValuationView.as_view(), name="finance-inventory-valuation"),
     path("reports/asset-register", AssetRegisterView.as_view(), name="finance-asset-register"),
     path("reports/ar-aging", ARAgingView.as_view(), name="finance-ar-aging"),
@@ -137,6 +154,7 @@ urlpatterns = [
     path("contacts", ContactListCreateView.as_view(), name="finance-contacts"),
     path("items", ItemListCreateView.as_view(), name="finance-items"),
     path("tax-rates", TaxRateListCreateView.as_view(), name="finance-tax-rates"),
+    path("country-packs", CountryPackListView.as_view(), name="finance-country-packs"),
     path("payment-terms", PaymentTermListCreateView.as_view(), name="finance-payment-terms"),
     path("exchange-rates", ExchangeRateListCreateView.as_view(), name="finance-exchange-rates"),
     path("quotes", QuoteListCreateView.as_view(), name="finance-quotes"),

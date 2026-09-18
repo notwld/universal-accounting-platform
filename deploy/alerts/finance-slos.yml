@@ -1,0 +1,24 @@
+groups:
+  - name: finance-slos
+    rules:
+      - alert: FinancePostingErrors
+        expr: increase(finance_post_total{result="error"}[10m]) / increase(finance_post_total[10m]) > 0.01
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: Finance posting error ratio above 1%
+      - alert: FinanceWebhookLag
+        expr: finance_webhooks_pending > 0
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: Outbound finance webhooks stuck pending
+      - alert: FinanceReportSlow
+        expr: histogram_quantile(0.95, finance_report_duration_seconds) > 5
+        for: 5m
+        labels:
+          severity: ticket
+        annotations:
+          summary: Finance report p95 above 5s

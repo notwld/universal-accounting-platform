@@ -111,6 +111,8 @@ class FinanceSettings(models.Model):
     retained_earnings_account = models.ForeignKey(
         "finance.Account", null=True, blank=True, on_delete=models.PROTECT, related_name="+"
     )
+    cutover_mode = models.CharField(max_length=16, blank=True, default="")
+    cutover_stage = models.CharField(max_length=32, blank=True, default="")
     require_document_approval = models.BooleanField(default=False)
     allow_self_approve = models.BooleanField(default=False)
     approval_threshold = models.DecimalField(max_digits=20, decimal_places=8, default=0)
@@ -292,3 +294,89 @@ class ApprovalAction(models.Model):
                 name="uniq_finance_approval_action",
             )
         ]
+
+
+class FinanceCountryPack(models.Model):
+    id = models.CharField(primary_key=True, max_length=36, default=new_uuid, editable=False)
+    organization = models.ForeignKey("tenancy.Organization", on_delete=models.CASCADE)
+    country_code = models.CharField(max_length=16)
+    enabled = models.BooleanField(default=False)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    reviewed_by = models.CharField(max_length=36, blank=True, default="")
+    capabilities = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        db_table = "finance_country_pack"
+        constraints = [
+            models.UniqueConstraint(fields=["organization", "country_code"], name="uniq_finance_country_pack")
+        ]
+
+
+class FinanceAdjustment(models.Model):
+    id = models.CharField(primary_key=True, max_length=36, default=new_uuid, editable=False)
+    organization = models.ForeignKey("tenancy.Organization", on_delete=models.CASCADE)
+    kind = models.CharField(max_length=16)
+    debit_account = models.ForeignKey("finance.Account", on_delete=models.PROTECT, related_name="+")
+    credit_account = models.ForeignKey("finance.Account", on_delete=models.PROTECT, related_name="+")
+    amount = models.DecimalField(max_digits=20, decimal_places=8)
+    entry_date = models.DateField()
+    reverse_on = models.DateField()
+    memo = models.CharField(max_length=255, blank=True, default="")
+    journal = models.ForeignKey("finance.JournalEntry", null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    reverse_journal = models.ForeignKey(
+        "finance.JournalEntry", null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+
+    class Meta:
+        db_table = "finance_adjustment"
+
+
+class FinanceFxReval(models.Model):
+    id = models.CharField(primary_key=True, max_length=36, default=new_uuid, editable=False)
+    organization = models.ForeignKey("tenancy.Organization", on_delete=models.CASCADE)
+    as_of = models.DateField()
+    amount = models.DecimalField(max_digits=20, decimal_places=8, default=0)
+    journal = models.ForeignKey("finance.JournalEntry", null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    reverse_journal = models.ForeignKey(
+        "finance.JournalEntry", null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+
+    class Meta:
+        db_table = "finance_fx_reval"
+        constraints = [models.UniqueConstraint(fields=["organization", "as_of"], name="uniq_finance_fx_reval")]
+
+
+class FinanceWebhookEndpoint(models.Model):
+    id = models.CharField(primary_key=True, max_length=36, default=new_uuid, editable=False)
+    organization = models.ForeignKey("tenancy.Organization", on_delete=models.CASCADE)
+    url = models.CharField(max_length=500)
+    secret = models.CharField(max_length=64)
+    events = models.JSONField(default=list, blank=True)
+    enabled = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "finance_webhook_endpoint"
+
+
+class FinanceWebhookDelivery(models.Model):
+    class Status(models.TextChoices):
+        PENDING = "pending"
+        DELIVERED = "delivered"
+        DEAD = "dead"
+
+    id = models.CharField(primary_key=True, max_length=36, default=new_uuid, editable=False)
+    organization = models.ForeignKey("tenancy.Organization", on_delete=models.CASCADE)
+    endpoint = models.ForeignKey(FinanceWebhookEndpoint, on_delete=models.CASCADE)
+    event_id = models.CharField(max_length=36)
+    event_type = models.CharField(max_length=64)
+    payload = models.JSONField(default=dict)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
+    attempts = models.PositiveSmallIntegerField(default=0)
+    next_attempt = models.DateTimeField()
+    last_error = models.CharField(max_length=255, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "finance_webhook_delivery"
+        constraints = [models.UniqueConstraint(fields=["organization", "event_id"], name="uniq_finance_webhook_event")]

@@ -336,3 +336,33 @@ DROP POLICY IF EXISTS finance_reporting_tag_isolation ON finance_reporting_tag;
 CREATE POLICY finance_reporting_tag_isolation ON finance_reporting_tag
   USING (organization_id = current_setting('app.organization_id', true))
   WITH CHECK (organization_id = current_setting('app.organization_id', true));
+
+ALTER TABLE finance_country_pack ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS finance_country_pack_isolation ON finance_country_pack;
+CREATE POLICY finance_country_pack_isolation ON finance_country_pack
+  USING (organization_id = current_setting('app.organization_id', true))
+  WITH CHECK (organization_id = current_setting('app.organization_id', true));
+
+ALTER TABLE finance_adjustment ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS finance_adjustment_isolation ON finance_adjustment;
+CREATE POLICY finance_adjustment_isolation ON finance_adjustment
+  USING (organization_id = current_setting('app.organization_id', true))
+  WITH CHECK (organization_id = current_setting('app.organization_id', true));
+
+ALTER TABLE finance_fx_reval ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS finance_fx_reval_isolation ON finance_fx_reval;
+CREATE POLICY finance_fx_reval_isolation ON finance_fx_reval
+  USING (organization_id = current_setting('app.organization_id', true))
+  WITH CHECK (organization_id = current_setting('app.organization_id', true));
+
+ALTER TABLE finance_webhook_endpoint ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS finance_webhook_endpoint_isolation ON finance_webhook_endpoint;
+CREATE POLICY finance_webhook_endpoint_isolation ON finance_webhook_endpoint
+  USING (organization_id = current_setting('app.organization_id', true))
+  WITH CHECK (organization_id = current_setting('app.organization_id', true));
+
+ALTER TABLE finance_webhook_delivery ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS finance_webhook_delivery_isolation ON finance_webhook_delivery;
+CREATE POLICY finance_webhook_delivery_isolation ON finance_webhook_delivery
+  USING (organization_id = current_setting('app.organization_id', true))
+  WITH CHECK (organization_id = current_setting('app.organization_id', true));

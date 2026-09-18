@@ -257,7 +257,12 @@ def cash_flow(*, org, start, end, exponent: int):
 def tax_summary(*, org, start, end, exponent: int):
     from apps.finance.models import TaxRate
 
-    ids = list(TaxRate.objects.filter(organization=org).values_list("payable_account_id", flat=True))
+    ids = {
+        aid
+        for pair in TaxRate.objects.filter(organization=org).values_list("payable_account_id", "recoverable_account_id")
+        for aid in pair
+        if aid
+    }
     qs = _posted_lines(org=org, start=start, end=end)
     if ids:
         qs = qs.filter(account_id__in=ids)
@@ -333,3 +338,32 @@ def as_xlsx(rows) -> bytes:
         zf.writestr("xl/sharedStrings.xml", sst)
         zf.writestr("xl/worksheets/sheet1.xml", sheet)
     return buf.getvalue()
+
+
+def as_pdf(title, rows) -> bytes:
+    keys = list(rows[0].keys()) if rows else []
+    lines = [str(title or "report")]
+    if keys:
+        lines.append(" | ".join(keys))
+        for row in rows[:60]:
+            lines.append(" | ".join(str(row.get(k, ""))[:32] for k in keys))
+    body = " ".join(lines)[:800].replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+    stream = f"BT /F1 10 Tf 40 750 Td ({body}) Tj ET".encode()
+    objs = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+        b"<< /Length %d >>\nstream\n" % len(stream) + stream + b"\nendstream",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>",
+    ]
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = [0]
+    for i, obj in enumerate(objs, 1):
+        offsets.append(len(out))
+        out += f"{i} 0 obj\n".encode() + obj + b"\nendobj\n"
+    xref = len(out)
+    out += f"xref\n0 {len(objs)+1}\n0000000000 65535 f \n".encode()
+    for off in offsets[1:]:
+        out += f"{off:010d} 00000 n \n".encode()
+    out += f"trailer << /Size {len(objs)+1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
+    return bytes(out)

@@ -650,7 +650,7 @@ class TaxSummaryView(APIView):
 
 def _table_response(request, rows, filename):
     fmt = (request.query_params.get("export") or "").lower()
-    if fmt not in ("csv", "xlsx"):
+    if fmt not in ("csv", "xlsx", "pdf"):
         return None
     from django.http import HttpResponse
 
@@ -658,6 +658,11 @@ def _table_response(request, rows, filename):
         body = report_selectors.as_csv(rows)
         resp = HttpResponse(body, content_type="text/csv")
         resp["Content-Disposition"] = f'attachment; filename="{filename}.csv"'
+        return resp
+    if fmt == "pdf":
+        body = report_selectors.as_pdf(filename, rows)
+        resp = HttpResponse(body, content_type="application/pdf")
+        resp["Content-Disposition"] = f'attachment; filename="{filename}.pdf"'
         return resp
     body = report_selectors.as_xlsx(rows)
     resp = HttpResponse(body, content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")

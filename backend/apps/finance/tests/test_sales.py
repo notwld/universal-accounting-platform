@@ -53,7 +53,7 @@ def _sales_setup(api, token, org, cash, income, ar):
     assert settings.status_code == 200, settings.content
     tax = api.post(
         "/api/v1/finance/tax-rates",
-        {"name": "Output 10", "rate": "0.10", "method": "exclusive", "payable_account_id": tax_pay["id"], "valid_from": "2026-01-01"},
+        {"name": "Output 10", "rate": "0.10", "method": "exclusive", "payable_account_id": tax_pay["id"], "valid_from": "2024-01-01"},
         format="json", **_h(token, org["id"]),
     ).json()["data"]
     contact = api.post(

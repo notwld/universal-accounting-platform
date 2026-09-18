@@ -392,6 +392,7 @@ def _bill(bill):
             {
                 "description": ln.description, "net": str(ln.net), "tax_amount": str(ln.tax_amount),
                 "total": str(ln.total), "tax_rate_value": str(ln.tax_rate_value), "tax_name": ln.tax_name,
+                "tax_kind": ln.tax_kind, "tax_components": ln.tax_components,
             }
             for ln in bill.lines.all()
         ],

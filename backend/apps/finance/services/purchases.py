@@ -30,7 +30,7 @@ from apps.finance.services.resolve import currency_get, org_get, org_get_optiona
 from apps.finance.services.sales import resolve_rate, to_base
 from apps.finance.services.sequence import next_document_number
 from apps.finance.services.stock import receive_line, return_qty
-from apps.finance.services.tax import line_tax
+from apps.finance.services.tax import apply_rate
 
 
 def _settings(org) -> FinanceSettings:
@@ -55,7 +55,7 @@ def outstanding(bill: Bill, as_of=None) -> Decimal:
     return bill.total - used
 
 
-def _snapshot_bill(bill: Bill, lines):
+def _snapshot_bill(bill: Bill, lines, persist=True):
     settings = _settings(bill.organization)
     exponent = settings.base_currency.exponent
     fx = resolve_rate(
@@ -64,7 +64,8 @@ def _snapshot_bill(bill: Bill, lines):
     gl = []
     total = Decimal("0")
     base_total = Decimal("0")
-    bill.lines.all().delete()
+    if persist:
+        bill.lines.all().delete()
     for raw in lines:
         item = Item.objects.filter(id=raw["item_id"], organization=bill.organization).first()
         if not item or item.status != "active":
@@ -84,68 +85,94 @@ def _snapshot_bill(bill: Bill, lines):
         tax = None
         tax_id = raw.get("tax_rate_id") or item.default_tax_id
         if tax_id:
-            tax = TaxRate.objects.filter(id=tax_id, organization=bill.organization).first()
-        method = tax.method if tax else "exclusive"
-        rate = tax.rate if tax else Decimal("0")
-        net, tax_amt, line_total = line_tax(amount=ext, rate=rate, method=method, exponent=exponent)
+            tax = TaxRate.objects.select_related("compound_on", "compound_on__compound_on").filter(
+                id=tax_id, organization=bill.organization
+            ).first()
+        result = apply_rate(tax=tax, amount=ext, exponent=exponent, entry_date=bill.entry_date)
+        net, tax_amt, line_total = result["net"], result["tax"], result["total"]
         base_net = to_base(net, fx, exponent)
         base_tax = to_base(tax_amt, fx, exponent)
         base_line = to_base(line_total, fx, exponent)
         total += line_total
         base_total += base_line
-        BillLine.objects.create(
-            bill=bill,
-            organization=bill.organization,
-            item=item,
-            description=raw.get("description") or item.name,
-            quantity=qty,
-            unit_price=price,
-            tax_rate_id_snap=tax.id if tax else "",
-            tax_rate_value=rate,
-            tax_method=method,
-            tax_name=tax.name if tax else "",
-            net=net,
-            tax_amount=tax_amt,
-            total=line_total,
-            base_net=base_net,
-            base_tax=base_tax,
-            base_total=base_line,
-            expense_account_id=expense_id,
-        )
-        gl.append(("expense", expense_id, base_net, raw.get("description") or item.name))
-        if tax and base_tax:
-            gl.append(("tax", tax.payable_account_id, base_tax, tax.name))
+        if persist:
+            BillLine.objects.create(
+                bill=bill,
+                organization=bill.organization,
+                item=item,
+                description=raw.get("description") or item.name,
+                quantity=qty,
+                unit_price=price,
+                tax_rate_id_snap=tax.id if tax else "",
+                tax_rate_value=Decimal(str((result["components"] or [{}])[-1].get("rate") or 0)) if tax else 0,
+                tax_method=tax.method if tax else "exclusive",
+                tax_name=tax.name if tax else "",
+                tax_kind=result["kind"],
+                tax_components=[{k: (str(v) if k in ("amount", "recoverable", "rate") else v) for k, v in p.items()} for p in result["components"]],
+                net=net,
+                tax_amount=tax_amt,
+                total=line_total,
+                base_net=base_net,
+                base_tax=base_tax,
+                base_total=base_line,
+                expense_account_id=expense_id,
+            )
+        kind = result["kind"]
+        irrec = Decimal("0")
+        for part in result["components"]:
+            amt = to_base(part["amount"], fx, exponent)
+            rec = to_base(part["recoverable"], fx, exponent)
+            if not amt:
+                continue
+            if kind == "withholding":
+                gl.append(("wht_pay", part["payable_account_id"], amt, part["name"]))
+            elif kind == "reverse_charge":
+                if rec:
+                    gl.append(("tax_in", part["recoverable_account_id"], rec, part["name"]))
+                gl.append(("tax_out", part["payable_account_id"], amt, part["name"]))
+                irrec += amt - rec
+            else:
+                irrec += amt - rec
+                if rec:
+                    gl.append(("tax_in", part["recoverable_account_id"], rec, part["name"]))
+        gl.append(("expense", expense_id, base_net + irrec, raw.get("description") or item.name))
     require_ap(settings)
     journal_lines = []
-    for _kind, account_id, amt, desc in gl:
-        if amt:
-            journal_lines.append(
-                {"account_id": account_id, "debit": str(amt), "credit": "0", "description": desc}
-            )
+    for kind, account_id, amt, desc in gl:
+        if not amt:
+            continue
+        if kind in ("wht_pay", "tax_out"):
+            journal_lines.append({"account_id": account_id, "debit": "0", "credit": str(amt), "description": desc})
+        else:
+            journal_lines.append({"account_id": account_id, "debit": str(amt), "credit": "0", "description": desc})
     journal_lines.append(
         {"account_id": settings.ap_account_id, "debit": "0", "credit": str(base_total), "description": "AP"}
     )
-    bill.fx_rate = fx
-    bill.total = total
-    bill.base_total = base_total
-    bill.contact_name = bill.contact.name
-    bill.save()
+    if persist:
+        bill.fx_rate = fx
+        bill.total = total
+        bill.base_total = base_total
+        bill.contact_name = bill.contact.name
+        bill.save()
     return journal_lines
 
 
 def bill_preview(bill: Bill):
-    settings = _settings(bill.organization)
-    require_ap(settings)
-    gl = []
-    for line in bill.lines.all():
-        if line.base_net:
-            gl.append({"account_id": line.expense_account_id, "debit": str(line.base_net), "credit": "0", "description": line.description})
-        if line.base_tax:
-            tax = TaxRate.objects.filter(id=line.tax_rate_id_snap, organization=bill.organization).first()
-            if tax:
-                gl.append({"account_id": tax.payable_account_id, "debit": str(line.base_tax), "credit": "0", "description": line.tax_name})
-    gl.append({"account_id": settings.ap_account_id, "debit": "0", "credit": str(bill.base_total), "description": "AP"})
-    return gl
+    return _snapshot_bill(
+        bill,
+        [
+            {
+                "item_id": ln.item_id,
+                "quantity": ln.quantity,
+                "unit_price": ln.unit_price,
+                "tax_rate_id": ln.tax_rate_id_snap or None,
+                "description": ln.description,
+                "expense_account_id": ln.expense_account_id,
+            }
+            for ln in bill.lines.all()
+        ],
+        persist=False,
+    )
 
 
 def set_bill_lines(bill, lines):

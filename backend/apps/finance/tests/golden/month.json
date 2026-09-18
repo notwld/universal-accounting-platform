@@ -1,0 +1,9 @@
+{
+  "reviewed": "synthetic accountant pack — not a live sign-off",
+  "from": "2026-01-01",
+  "to": "2026-12-31",
+  "trial_balance": {
+    "1000": {"closing_debit": "1000.00", "closing_credit": "0.00"},
+    "3000": {"closing_debit": "0.00", "closing_credit": "1000.00"}
+  }
+}

@@ -48,6 +48,8 @@ class BillLine(models.Model):
     tax_rate_value = models.DecimalField(max_digits=10, decimal_places=6, default=0)
     tax_method = models.CharField(max_length=16, default="exclusive")
     tax_name = models.CharField(max_length=100, blank=True, default="")
+    tax_kind = models.CharField(max_length=16, blank=True, default="standard")
+    tax_components = models.JSONField(default=list, blank=True)
     net = models.DecimalField(max_digits=20, decimal_places=8, default=0)
     tax_amount = models.DecimalField(max_digits=20, decimal_places=8, default=0)
     total = models.DecimalField(max_digits=20, decimal_places=8, default=0)

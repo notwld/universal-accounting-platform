@@ -25,6 +25,8 @@ class JournalEntry(models.Model):
         STOCK = "stock"
         ASSET = "asset"
         CLOSE = "close"
+        FX_REVAL = "fx_reval"
+        ADJUST = "adjust"
 
     id = models.CharField(primary_key=True, max_length=36, default=new_uuid, editable=False)
     organization = models.ForeignKey(

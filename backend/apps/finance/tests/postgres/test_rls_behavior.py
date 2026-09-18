@@ -49,4 +49,17 @@ def test_missing_org_context_hides_tenant_rows():
 
 
 def test_idempotency_and_refund_require_postgres_locks():
-    pytest.skip("two-connection lock races run in the PostgreSQL CI job as uap_app")
+    if connection.vendor != "postgresql":
+        pytest.skip("two-connection lock races run in the PostgreSQL CI job as uap_app")
+    other = connection.__class__(connection.settings_dict)
+    other.connect()
+    try:
+        with connection.cursor() as held:
+            held.execute("SELECT pg_advisory_lock(4242)")
+            with other.cursor() as waiter:
+                waiter.execute("SELECT pg_try_advisory_lock(4242)")
+                assert waiter.fetchone()[0] is False
+            held.execute("SELECT pg_advisory_unlock(4242)")
+    finally:
+        other.close()
+

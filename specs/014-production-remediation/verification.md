@@ -21,8 +21,8 @@ Date: 2026-09-18
 | B6 | In-file repeats persist; cross-file fingerprint matches `review`; identical file hash replays |
 | B7 | Complete rejects unresolved imported/review lines; records book balance |
 | B8 | Trial balance returns opening, period, and closing debit/credit |
-| B10 | ISO 4217 catalogue seeded (>100 current codes) |
+| B10 | ISO 4217 catalogue; generic tax engine (compound/RC/WHT/recoverable + dates); country pack = `generic` + accountant `reviewed` |
 
 ## Not claimed
 
-B9 year-close, B11 imports, B12/B13 security/ops, live two-connection Postgres CI as `uap_app`, country packs, screens, SMS, live bank clients.
+B11 column-mapping CSV import jobs, full ledger export, OpenAPI completeness; B12 remaining STRIDE/traces; B0 two-connection command races (idempotency/refund/stock) beyond advisory locks; live PITR drill; screens, SMS, live bank, jurisdiction tax packs.

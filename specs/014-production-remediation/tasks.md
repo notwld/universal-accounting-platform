@@ -15,3 +15,4 @@
 - [x] T013 B10 latest FX rate as_of <= date
 - [x] T014 B11 dry-run import + books export
 - [x] T015 B12/B13 step-up, throttle, STRIDE/ops notes, pip-audit workflow
+- [x] T016 Generic tax engine (compound/RC/WHT/recoverable) + country-pack gate (`generic` only, reviewed=true)

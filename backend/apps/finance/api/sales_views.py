@@ -1,5 +1,6 @@
 from datetime import date
 
+from django.utils import timezone
 from drf_spectacular.utils import extend_schema
 from rest_framework.views import APIView
 
@@ -18,6 +19,7 @@ from apps.finance.models import (
     QuoteLine,
     TaxRate,
 )
+from apps.finance.models.config import FinanceCountryPack
 from apps.finance.selectors.aging import ar_aging
 from apps.finance.services.resolve import currency_get, org_get, org_get_optional
 from apps.finance.services.sales import (
@@ -89,13 +91,25 @@ class TaxRateListCreateView(APIView):
     @extend_schema(tags=["Finance"], parameters=[ORG_HEADER])
     def post(self, request):
         _, org = _org_action(request, "finance.settings.configure")
+        kind = request.data.get("kind") or "standard"
+        if kind not in ("standard", "reverse_charge", "withholding", "exempt"):
+            raise AuthAPIError("validation_error", "Invalid tax kind")
+        compound_base = request.data.get("compound_base") or "running"
+        if compound_base not in ("net", "running"):
+            raise AuthAPIError("validation_error", "compound_base must be net or running")
         t = TaxRate.objects.create(
             organization=org,
             name=request.data.get("name"),
             rate=request.data.get("rate"),
             method=request.data.get("method") or TaxRate.Method.EXCLUSIVE,
+            kind=kind,
             payable_account=org_get(Account, org, request.data.get("payable_account_id")),
+            recoverable_account=org_get_optional(Account, org, request.data.get("recoverable_account_id")),
+            recoverable_rate=request.data.get("recoverable_rate") if request.data.get("recoverable_rate") is not None else 1,
+            compound_on=org_get_optional(TaxRate, org, request.data.get("compound_on_id")),
+            compound_base=compound_base,
             valid_from=request.data.get("valid_from") or date.today().isoformat(),
+            valid_to=request.data.get("valid_to") or None,
         )
         return envelope_success(request, _tax(t), http_status=201)
 
@@ -349,7 +363,20 @@ def _item(i):
 
 
 def _tax(t):
-    return {"id": t.id, "name": t.name, "rate": str(t.rate), "method": t.method}
+    return {
+        "id": t.id,
+        "name": t.name,
+        "rate": str(t.rate),
+        "method": t.method,
+        "kind": t.kind,
+        "payable_account_id": t.payable_account_id,
+        "recoverable_account_id": t.recoverable_account_id,
+        "recoverable_rate": str(t.recoverable_rate),
+        "compound_on_id": t.compound_on_id,
+        "compound_base": t.compound_base,
+        "valid_from": str(t.valid_from),
+        "valid_to": None if not t.valid_to else str(t.valid_to),
+    }
 
 
 def _quote(q):
@@ -370,7 +397,53 @@ def _invoice(inv):
             {
                 "description": ln.description, "net": str(ln.net), "tax_amount": str(ln.tax_amount),
                 "total": str(ln.total), "tax_rate_value": str(ln.tax_rate_value), "tax_name": ln.tax_name,
+                "tax_kind": ln.tax_kind, "tax_components": ln.tax_components,
             }
             for ln in inv.lines.all()
         ],
     }
+
+
+class CountryPackListView(APIView):
+    permission_classes = [IsApplicationUser]
+
+    @extend_schema(tags=["Finance"], parameters=[ORG_HEADER])
+    def get(self, request):
+        _, org = _org_action(request, "finance.settings.configure")
+        from apps.finance.services.country import catalog
+
+        enabled = {
+            p.country_code: {"enabled": p.enabled, "reviewed_at": None if not p.reviewed_at else p.reviewed_at.isoformat()}
+            for p in FinanceCountryPack.objects.filter(organization=org)
+        }
+        items = []
+        for row in catalog():
+            extra = enabled.get(row["code"], {"enabled": False, "reviewed_at": None})
+            items.append({**row, **extra})
+        return envelope_success(request, {"items": items})
+
+    @extend_schema(tags=["Finance"], parameters=[ORG_HEADER])
+    def post(self, request):
+        user, org = _org_action(request, "finance.settings.configure")
+        from apps.finance.services.country import PACKS
+
+        code = str(request.data.get("country_code") or "").strip().lower()
+        if code not in PACKS:
+            raise AuthAPIError("validation_error", "Unknown country pack")
+        if not request.data.get("reviewed"):
+            raise AuthAPIError("validation_error", "Accountant review is required to enable a country pack")
+        pack, _ = FinanceCountryPack.objects.update_or_create(
+            organization=org,
+            country_code=code,
+            defaults={
+                "enabled": True,
+                "reviewed_at": timezone.now(),
+                "reviewed_by": user.id,
+                "capabilities": PACKS[code],
+            },
+        )
+        return envelope_success(
+            request,
+            {"country_code": pack.country_code, "enabled": pack.enabled, "reviewed_at": pack.reviewed_at.isoformat()},
+            http_status=201,
+        )

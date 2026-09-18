@@ -38,8 +38,16 @@ class TaxRate(models.Model):
     name = models.CharField(max_length=100)
     rate = models.DecimalField(max_digits=10, decimal_places=6)
     method = models.CharField(max_length=16, choices=Method.choices, default=Method.EXCLUSIVE)
+    kind = models.CharField(max_length=16, default="standard")
     payable_account = models.ForeignKey("finance.Account", on_delete=models.PROTECT)
+    recoverable_account = models.ForeignKey(
+        "finance.Account", null=True, blank=True, on_delete=models.PROTECT, related_name="+"
+    )
+    recoverable_rate = models.DecimalField(max_digits=10, decimal_places=6, default=1)
+    compound_on = models.ForeignKey("self", null=True, blank=True, on_delete=models.PROTECT, related_name="compounds")
+    compound_base = models.CharField(max_length=16, default="running")
     valid_from = models.DateField()
+    valid_to = models.DateField(null=True, blank=True)
     status = models.CharField(max_length=16, default="active")
 
     class Meta:
@@ -161,6 +169,8 @@ class InvoiceLine(models.Model):
     tax_rate_value = models.DecimalField(max_digits=10, decimal_places=6, default=0)
     tax_method = models.CharField(max_length=16, default="exclusive")
     tax_name = models.CharField(max_length=100, blank=True, default="")
+    tax_kind = models.CharField(max_length=16, blank=True, default="standard")
+    tax_components = models.JSONField(default=list, blank=True)
     net = models.DecimalField(max_digits=20, decimal_places=8, default=0)
     tax_amount = models.DecimalField(max_digits=20, decimal_places=8, default=0)
     total = models.DecimalField(max_digits=20, decimal_places=8, default=0)

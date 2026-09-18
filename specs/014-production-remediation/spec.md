@@ -58,4 +58,4 @@ Stock quantity is not rounded to currency decimals. Idempotency collisions remai
 
 ## Out of Scope
 
-- UI, consolidation, country packs, Plaid, SMS.
+- UI, consolidation, jurisdiction-specific country packs (AE/GB rate seeds), Plaid, SMS.
