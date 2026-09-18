@@ -1,9 +1,20 @@
 import { create } from "zustand";
+import { persist } from "zustand/middleware";
 
-export const useOrg = create<{
+type OrgState = {
   orgId: string | null;
-  setOrgId: (orgId: string | null) => void;
-}>((set) => ({
-  orgId: null,
-  setOrgId: (orgId) => set({ orgId }),
-}));
+  orgName: string | null;
+  setOrg: (org: { id: string; name: string } | null) => void;
+};
+
+export const useOrg = create<OrgState>()(
+  persist(
+    (set) => ({
+      orgId: null,
+      orgName: null,
+      setOrg: (org) =>
+        set(org ? { orgId: org.id, orgName: org.name } : { orgId: null, orgName: null }),
+    }),
+    { name: "uap-org" }
+  )
+);
