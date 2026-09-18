@@ -19,11 +19,11 @@ export function AuthShell({
   footer: React.ReactNode;
 }) {
   return (
-    <Card className="w-full max-w-sm shadow-sm">
+    <Card className="w-full max-w-sm shadow-sm transition-shadow duration-200">
       <CardHeader className="text-center">
         <p className="text-sm font-medium tracking-tight">UAP</p>
-        <CardTitle className="text-xl">{title}</CardTitle>
-        <CardDescription>{subtitle}</CardDescription>
+        <CardTitle className="text-balance text-xl">{title}</CardTitle>
+        <CardDescription className="text-pretty">{subtitle}</CardDescription>
       </CardHeader>
       <CardContent>{children}</CardContent>
       <CardFooter className="justify-center text-sm text-muted-foreground">

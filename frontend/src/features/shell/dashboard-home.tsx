@@ -30,37 +30,46 @@ export function DashboardHome() {
   }
 
   return (
-    <div className="flex flex-col gap-6 p-6">
-      <div>
+    <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-4 p-4 sm:gap-6 sm:p-6">
+      <div className="min-w-0">
         <p className="text-sm text-muted-foreground">Dashboard</p>
-        <h1 className="text-xl font-semibold tracking-tight">{orgName}</h1>
+        <h1 className="text-balance text-xl font-semibold tracking-tight sm:text-2xl">
+          {orgName}
+        </h1>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2">
-        <section className="rounded-xl border bg-card p-5">
+      <div className="grid gap-3 sm:gap-4 md:grid-cols-2">
+        <section className="rounded-xl border bg-card p-4 transition-shadow duration-200 hover:shadow-sm sm:p-5">
           <h2 className="text-sm font-medium">Total Receivables</h2>
-          <p className="mt-3 text-2xl font-semibold tabular-nums text-muted-foreground">—</p>
-          <p className="mt-2 text-xs text-muted-foreground">
+          <p className="mt-3 font-mono text-2xl font-semibold tabular-nums text-muted-foreground">
+            —
+          </p>
+          <p className="mt-2 text-xs text-muted-foreground text-pretty">
             Live balances connect when sales screens ship.
           </p>
         </section>
-        <section className="rounded-xl border bg-card p-5">
+        <section className="rounded-xl border bg-card p-4 transition-shadow duration-200 hover:shadow-sm sm:p-5">
           <h2 className="text-sm font-medium">Total Payables</h2>
-          <p className="mt-3 text-2xl font-semibold tabular-nums text-muted-foreground">—</p>
-          <p className="mt-2 text-xs text-muted-foreground">
+          <p className="mt-3 font-mono text-2xl font-semibold tabular-nums text-muted-foreground">
+            —
+          </p>
+          <p className="mt-2 text-xs text-muted-foreground text-pretty">
             Live balances connect when purchase screens ship.
           </p>
         </section>
       </div>
 
-      <section className="rounded-xl border bg-card p-5">
+      <section className="rounded-xl border bg-card p-4 transition-shadow duration-200 hover:shadow-sm sm:p-5">
         <h2 className="text-sm font-medium">Cash flow</h2>
-        <p className="mt-3 text-sm text-muted-foreground">
+        <p className="mt-3 text-sm text-muted-foreground text-pretty">
           Charts stay empty until report APIs are wired. Organization{" "}
-          <span className="font-medium text-foreground">{orgName}</span> is active for every
-          request.
+          <span className="font-medium text-foreground">{orgName}</span> is active
+          for every request.
         </p>
-        <Link href="/" className={`${buttonVariants({ variant: "outline" })} mt-4 h-9`}>
+        <Link
+          href="/"
+          className={`${buttonVariants({ variant: "outline" })} mt-4 h-11 min-h-11 sm:h-9 sm:min-h-0`}
+        >
           Switch organization
         </Link>
       </section>

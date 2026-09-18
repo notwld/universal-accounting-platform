@@ -87,8 +87,8 @@ export function HomeGate() {
         <UserButton />
       </div>
 
-      <div className="flex flex-1 flex-col items-center justify-center px-4 py-16">
-        <div className="grid w-full max-w-2xl grid-cols-2 gap-4 sm:grid-cols-3">
+      <div className="flex flex-1 flex-col items-center justify-center px-3 py-12 sm:px-4 sm:py-16">
+        <div className="grid w-full max-w-2xl grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 md:grid-cols-3">
           {items.map((org) => (
             <button
               key={org.id}
@@ -97,7 +97,7 @@ export function HomeGate() {
                 setOrg({ id: org.id, name: org.name });
                 router.push("/dashboard");
               }}
-              className="group aspect-square rounded-2xl border bg-card p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-foreground/20 hover:shadow-md focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+              className="group aspect-square min-h-44 rounded-2xl border bg-card p-5 text-left shadow-sm transition duration-200 hover:-translate-y-0.5 hover:border-foreground/20 hover:shadow-md focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 sm:min-h-0"
             >
               <div className="flex h-full flex-col">
                 <span className="flex size-12 items-center justify-center rounded-xl bg-muted transition group-hover:bg-muted/80">
@@ -164,7 +164,7 @@ export function HomeGate() {
             <button
               type="button"
               onClick={() => setCreating(true)}
-              className="group flex aspect-square flex-col items-center justify-center gap-3 rounded-2xl border border-dashed bg-card/50 p-5 text-center transition hover:border-foreground/30 hover:bg-card focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+              className="group flex aspect-square min-h-44 flex-col items-center justify-center gap-3 rounded-2xl border border-dashed bg-card/50 p-5 text-center transition duration-200 hover:border-foreground/30 hover:bg-card focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 sm:min-h-0"
             >
               <span className="flex size-12 items-center justify-center rounded-xl border border-dashed bg-muted/50 transition group-hover:bg-muted">
                 <Plus className="size-6 text-muted-foreground" />

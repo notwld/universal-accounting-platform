@@ -1,140 +1,76 @@
 "use client";
 
-import {
-  Banknote,
-  BookOpen,
-  ChevronDown,
-  FileBarChart,
-  Home,
-  Package,
-  ShoppingCart,
-  Wallet,
-} from "lucide-react";
+import { ChevronDown } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { NAV, type NavGroup } from "@/features/shell/nav";
 import { cn } from "@/lib/utils";
 
-type NavLeaf = {
-  href: string;
-  label: string;
-  icon: typeof Home;
-  soon?: boolean;
-};
-
-type NavGroup = {
-  label: string;
-  icon: typeof Home;
-  children: string[];
-};
-
-const nav: (NavLeaf | NavGroup)[] = [
-  { href: "/dashboard", label: "Home", icon: Home },
-  { href: "#", label: "Items", icon: Package, soon: true },
-  {
-    label: "Sales",
-    icon: Wallet,
-    children: [
-      "Customers",
-      "Quotes",
-      "Invoices",
-      "Recurring Invoices",
-      "Payments Received",
-      "Credit Notes",
-    ],
-  },
-  {
-    label: "Purchases",
-    icon: ShoppingCart,
-    children: ["Vendors", "Bills", "Purchase Orders", "Payments Made"],
-  },
-  { href: "#", label: "Banking", icon: Banknote, soon: true },
-  { href: "#", label: "Accountant", icon: BookOpen, soon: true },
-  { href: "#", label: "Reports", icon: FileBarChart, soon: true },
-];
-
-function isGroup(item: NavLeaf | NavGroup): item is NavGroup {
-  return "children" in item;
-}
-
 const itemBase =
-  "flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left transition-colors duration-200";
+  "flex min-h-11 w-full items-center gap-2 rounded-md px-2.5 py-2 text-left transition-colors duration-200 lg:min-h-0";
 const itemIdle = "text-foreground/80 hover:bg-black/[0.04]";
 const groupOpen = "bg-black/[0.06] text-foreground font-medium";
-const pageActive = "bg-[oklch(0.55_0.14_250)] font-medium text-white hover:bg-[oklch(0.5_0.14_250)]";
+const pageActive =
+  "bg-[oklch(0.55_0.14_250)] font-medium text-white hover:bg-[oklch(0.5_0.14_250)]";
 
-export function AppSidebar() {
+function groupForPath(pathname: string): string | null {
+  for (const item of NAV) {
+    if (item.kind === "group" && item.children.some((c) => c.href === pathname)) {
+      return item.label;
+    }
+  }
+  return null;
+}
+
+export function AppSidebar({
+  open,
+  onNavigate,
+}: {
+  open: boolean;
+  onNavigate?: () => void;
+}) {
   const pathname = usePathname();
-  const [openKey, setOpenKey] = useState<string | null>("Sales");
+  const [openKey, setOpenKey] = useState<string | null>(() => groupForPath(pathname) ?? "Sales");
+
+  useEffect(() => {
+    const g = groupForPath(pathname);
+    if (g) setOpenKey(g);
+  }, [pathname]);
 
   return (
-    <aside className="flex w-56 shrink-0 flex-col border-r bg-[oklch(0.97_0.005_255)]">
-      <nav className="flex flex-1 flex-col gap-0.5 p-2 text-sm">
-        {nav.map((item) => {
-          if (isGroup(item)) {
-            const open = openKey === item.label;
+    <aside
+      className={cn(
+        "flex w-56 shrink-0 flex-col border-r bg-[oklch(0.97_0.005_255)] transition-transform duration-300 ease-out",
+        "fixed top-12 bottom-0 left-0 z-40 lg:static lg:top-auto lg:z-auto",
+        open ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
+      )}
+    >
+      <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto p-2 text-sm">
+        {NAV.map((item) => {
+          if (item.kind === "group") {
             return (
-              <div key={item.label} className="min-w-0">
-                <button
-                  type="button"
-                  aria-expanded={open}
-                  onClick={() => setOpenKey((k) => (k === item.label ? null : item.label))}
-                  className={cn(itemBase, open ? groupOpen : itemIdle)}
-                >
-                  <item.icon className="size-4 shrink-0 opacity-80" />
-                  <span className="flex-1">{item.label}</span>
-                  <ChevronDown
-                    className={cn(
-                      "size-3.5 shrink-0 opacity-60 transition-transform duration-300 ease-out",
-                      open ? "rotate-0" : "-rotate-90"
-                    )}
-                  />
-                </button>
-                <div
-                  className={cn(
-                    "grid transition-[grid-template-rows] duration-300 ease-out",
-                    open ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
-                  )}
-                >
-                  <div className="overflow-hidden">
-                    <div
-                      className={cn(
-                        "mb-1 ml-4 border-l border-black/10 pl-2 transition-opacity duration-300",
-                        open ? "opacity-100" : "opacity-0"
-                      )}
-                    >
-                      {item.children.map((child) => (
-                        <span
-                          key={child}
-                          className="block cursor-default rounded-md px-2 py-1.5 text-muted-foreground"
-                          title="Coming soon"
-                        >
-                          {child}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </div>
+              <NavGroupBlock
+                key={item.label}
+                item={item}
+                open={openKey === item.label}
+                pathname={pathname}
+                onToggle={() =>
+                  setOpenKey((k) => (k === item.label ? null : item.label))
+                }
+                onNavigate={onNavigate}
+              />
             );
           }
 
-          const className = cn(
-            itemBase,
-            item.href === pathname ? pageActive : itemIdle
-          );
-
-          if (item.soon || item.href === "#") {
-            return (
-              <span key={item.label} className={className} title="Coming soon">
-                <item.icon className="size-4 shrink-0 opacity-80" />
-                {item.label}
-              </span>
-            );
-          }
-
+          const active = pathname === item.href;
           return (
-            <Link key={item.label} href={item.href} className={className}>
+            <Link
+              key={item.label}
+              href={item.href}
+              className={cn(itemBase, active ? pageActive : itemIdle)}
+              onClick={onNavigate}
+            >
               <item.icon className="size-4 shrink-0 opacity-80" />
               {item.label}
             </Link>
@@ -142,5 +78,73 @@ export function AppSidebar() {
         })}
       </nav>
     </aside>
+  );
+}
+
+function NavGroupBlock({
+  item,
+  open,
+  pathname,
+  onToggle,
+  onNavigate,
+}: {
+  item: NavGroup;
+  open: boolean;
+  pathname: string;
+  onToggle: () => void;
+  onNavigate?: () => void;
+}) {
+  return (
+    <div className="min-w-0">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={onToggle}
+        className={cn(itemBase, open ? groupOpen : itemIdle)}
+      >
+        <item.icon className="size-4 shrink-0 opacity-80" />
+        <span className="flex-1 truncate">{item.label}</span>
+        <ChevronDown
+          className={cn(
+            "size-3.5 shrink-0 opacity-60 transition-transform duration-300 ease-out",
+            open ? "rotate-0" : "-rotate-90"
+          )}
+        />
+      </button>
+      <div
+        className={cn(
+          "grid transition-[grid-template-rows] duration-300 ease-out",
+          open ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
+        )}
+      >
+        <div className="overflow-hidden">
+          <div
+            className={cn(
+              "mb-1 ml-4 border-l border-black/10 pl-2 transition-opacity duration-300",
+              open ? "opacity-100" : "opacity-0"
+            )}
+          >
+            {item.children.map((child) => {
+              const active = pathname === child.href;
+              return (
+                <Link
+                  key={child.href}
+                  href={child.href}
+                  onClick={onNavigate}
+                  className={cn(
+                    "block min-h-10 truncate rounded-md px-2 py-2 transition-colors duration-200 lg:min-h-0 lg:py-1.5",
+                    active
+                      ? "bg-[oklch(0.55_0.14_250)] font-medium text-white"
+                      : "text-muted-foreground hover:bg-black/[0.04] hover:text-foreground"
+                  )}
+                >
+                  {child.label}
+                </Link>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }

@@ -1,22 +1,43 @@
 "use client";
 
 import { UserButton } from "@clerk/nextjs";
-import { Bell, Plus, Search, Settings } from "lucide-react";
+import { Bell, Menu, Plus, Search, Settings, X } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useOrg } from "@/stores/org";
 
-export function AppHeader() {
+export function AppHeader({
+  navOpen,
+  onNavToggle,
+}: {
+  navOpen: boolean;
+  onNavToggle: () => void;
+}) {
   const orgName = useOrg((s) => s.orgName);
 
   return (
-    <header className="flex h-12 shrink-0 items-center gap-3 bg-[oklch(0.28_0.04_255)] px-3 text-white">
-      <Link href="/dashboard" className="flex items-center gap-2 px-1 font-semibold tracking-tight">
-        <span className="flex size-7 items-center justify-center rounded bg-white/15 text-xs">
+    <header className="flex h-12 shrink-0 items-center gap-2 bg-[oklch(0.28_0.04_255)] px-2 text-white sm:gap-3 sm:px-3">
+      <Button
+        type="button"
+        size="icon-sm"
+        variant="ghost"
+        className="shrink-0 text-white hover:bg-white/10 hover:text-white lg:hidden"
+        aria-label={navOpen ? "Close menu" : "Open menu"}
+        aria-expanded={navOpen}
+        onClick={onNavToggle}
+      >
+        {navOpen ? <X /> : <Menu />}
+      </Button>
+
+      <Link
+        href="/dashboard"
+        className="flex min-w-0 items-center gap-2 px-1 font-semibold tracking-tight transition-opacity hover:opacity-90"
+      >
+        <span className="flex size-7 shrink-0 items-center justify-center rounded bg-white/15 text-xs">
           U
         </span>
-        <span className="hidden sm:inline">UAP Books</span>
+        <span className="hidden truncate sm:inline">UAP Books</span>
       </Link>
 
       <div className="mx-auto hidden w-full max-w-md md:block">
@@ -30,10 +51,10 @@ export function AppHeader() {
         </label>
       </div>
 
-      <div className="ml-auto flex items-center gap-1.5">
+      <div className="ml-auto flex items-center gap-1 sm:gap-1.5">
         <Link
           href="/"
-          className="hidden max-w-44 truncate rounded-md px-2 py-1.5 text-sm text-white/90 hover:bg-white/10 sm:block"
+          className="hidden max-w-36 truncate rounded-md px-2 py-1.5 text-sm text-white/90 transition-colors hover:bg-white/10 sm:block md:max-w-44"
           title="Switch organization"
         >
           {orgName ?? "Organization"}
@@ -41,7 +62,7 @@ export function AppHeader() {
         <Button
           type="button"
           size="icon-sm"
-          className="bg-[oklch(0.55_0.14_250)] text-white hover:bg-[oklch(0.5_0.14_250)]"
+          className="bg-[oklch(0.55_0.14_250)] text-white transition-colors hover:bg-[oklch(0.5_0.14_250)]"
           aria-label="Quick create"
         >
           <Plus />
@@ -50,7 +71,7 @@ export function AppHeader() {
           type="button"
           size="icon-sm"
           variant="ghost"
-          className="text-white hover:bg-white/10 hover:text-white"
+          className="hidden text-white hover:bg-white/10 hover:text-white sm:inline-flex"
           aria-label="Notifications"
         >
           <Bell />
@@ -59,7 +80,7 @@ export function AppHeader() {
           type="button"
           size="icon-sm"
           variant="ghost"
-          className="text-white hover:bg-white/10 hover:text-white"
+          className="hidden text-white hover:bg-white/10 hover:text-white sm:inline-flex"
           aria-label="Settings"
         >
           <Settings />
