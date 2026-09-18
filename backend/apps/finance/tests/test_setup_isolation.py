@@ -237,6 +237,7 @@ def test_access_and_posting(api, rsa_keys, auth_user, other_user):
         assert fail.status_code == 422
         assert fail.json()["error"]["code"] == "journal_imbalanced"
         assert JournalEntry.objects.filter(status=JournalEntry.Status.POSTED).count() == 0
+        JournalEntry.objects.filter(id=unbalanced.json()["data"]["id"]).delete()
 
         control = api.post(
             "/api/v1/finance/journals",
@@ -332,11 +333,14 @@ def test_access_and_posting(api, rsa_keys, auth_user, other_user):
             format="json",
             **auth_headers(token, org["id"]),
         ).json()["data"]
-        assert api.post(
+        JournalEntry.objects.filter(organization_id=org["id"], status=JournalEntry.Status.DRAFT).delete()
+        lock_resp = api.post(
             f"/api/v1/finance/periods/{period['id']}/lock",
+            {},
             format="json",
             **auth_headers(token, org["id"]),
-        ).status_code == 200
+        )
+        assert lock_resp.status_code == 200, lock_resp.content
         draft2 = api.post(
             "/api/v1/finance/journals",
             {

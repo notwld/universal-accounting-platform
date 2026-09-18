@@ -28,6 +28,7 @@ from apps.finance.models import (
     FinanceAuditEvent,
     FinanceSettings,
     JournalEntry,
+    JournalLine,
     VendorPayment,
 )
 from apps.finance.services.context import finance_tx
@@ -295,31 +296,68 @@ def _parse_statement(file_obj, exponent: int):
     return _parse_csv_bytes(raw, exponent)
 
 
-def import_statement(*, user_id, org, account_id, uploaded):
+def import_statement(*, user_id, org, account_id, uploaded, dry_run=False):
     with finance_tx(user_id=user_id, organization_id=org.id):
         account = _bank_account(org, account_id)
         exponent = _settings(org).base_currency.exponent
-        rows = _parse_statement(uploaded, exponent)
+        raw = uploaded.read()
+        if isinstance(raw, str):
+            raw = raw.encode()
+        file_hash = hashlib.sha256(raw).hexdigest()
+        prior = BankStatement.objects.filter(
+            organization=org, account=account, file_hash=file_hash
+        ).first()
+        if prior:
+            duplicates = [
+                {"entry_date": line.entry_date.isoformat(), "amount": str(line.amount), "description": line.description}
+                for line in prior.lines.all()
+            ]
+            return prior, [], duplicates, []
+        wrapped = SimpleUploadedFile(getattr(uploaded, "name", "") or "statement.csv", raw)
+        rows = _parse_statement(wrapped, exponent)
+        existing_fps = set(
+            BankLine.objects.filter(organization=org, account=account).values_list("fingerprint", flat=True)
+        )
+        if dry_run:
+            created, duplicates = [], []
+            seen = set(existing_fps)
+            for entry_date, amount, description in rows:
+                fp = _fingerprint(org.id, account.id, entry_date, amount, description)
+                row = {"entry_date": entry_date.isoformat(), "amount": str(amount), "description": description}
+                if fp in seen:
+                    duplicates.append(row)
+                else:
+                    created.append(row)
+                    seen.add(fp)
+            return None, created, duplicates, []
         statement = BankStatement.objects.create(
-            organization=org, account=account, original_name=(getattr(uploaded, "name", "") or "")[:255]
+            organization=org,
+            account=account,
+            original_name=(getattr(uploaded, "name", "") or "")[:255],
+            file_hash=file_hash,
         )
         created, duplicates = [], []
-        for entry_date, amount, description in rows:
+        for source_row, (entry_date, amount, description) in enumerate(rows, start=1):
             fp = _fingerprint(org.id, account.id, entry_date, amount, description)
-            try:
-                with transaction.atomic():
-                    line = BankLine.objects.create(
-                        organization=org,
-                        statement=statement,
-                        account=account,
-                        entry_date=entry_date,
-                        amount=amount,
-                        description=description,
-                        fingerprint=fp,
-                    )
-                created.append(line)
-            except IntegrityError:
+            review = fp in existing_fps
+            line = BankLine.objects.create(
+                organization=org,
+                statement=statement,
+                account=account,
+                entry_date=entry_date,
+                amount=amount,
+                description=description,
+                fingerprint=fp,
+                parser_version="1",
+                source_row=source_row,
+                raw={"date": entry_date.isoformat(), "amount": str(amount), "description": description},
+                review_reason="fingerprint_match" if review else "",
+                status=BankLine.Status.REVIEW if review else BankLine.Status.IMPORTED,
+            )
+            if review:
                 duplicates.append({"entry_date": entry_date.isoformat(), "amount": str(amount), "description": description})
+            else:
+                created.append(line)
         FinanceAuditEvent.objects.create(
             organization=org,
             actor_user_id=user_id,
@@ -339,7 +377,7 @@ def match_line(*, user_id, org, line_id, customer_payment_id=None, vendor_paymen
         line = BankLine.objects.select_for_update().filter(id=line_id, organization=org).first()
         if not line:
             raise AuthAPIError("cross_organization", "Bank line not found")
-        if line.status != BankLine.Status.IMPORTED:
+        if line.status not in (BankLine.Status.IMPORTED, BankLine.Status.REVIEW):
             raise AuthAPIError("already_matched", "Bank line already matched or categorized")
         if customer_payment_id:
             pay = CustomerPayment.objects.filter(
@@ -380,7 +418,7 @@ def categorize_line(*, user_id, org, line_id, account_id, idempotency_key):
         line = BankLine.objects.select_for_update().filter(id=line_id, organization=org).first()
         if not line:
             raise AuthAPIError("cross_organization", "Bank line not found")
-        if line.status != BankLine.Status.IMPORTED:
+        if line.status not in (BankLine.Status.IMPORTED, BankLine.Status.REVIEW):
             raise AuthAPIError("already_matched", "Bank line already matched or categorized")
         contra = Account.objects.filter(id=account_id, organization=org).first()
         if not contra:
@@ -438,15 +476,35 @@ def complete_reconciliation(*, user_id, org, recon_id):
             raise AuthAPIError("cross_organization", "Reconciliation not found")
         if rec.status == BankReconciliation.Status.COMPLETE:
             return rec
+        if BankReconciliation.objects.filter(
+            organization=org,
+            account=rec.account,
+            status=BankReconciliation.Status.COMPLETE,
+            start_on__lte=rec.end_on,
+            end_on__gte=rec.start_on,
+        ).exclude(pk=rec.pk).exists():
+            raise AuthAPIError("recon_overlap", "Overlapping completed reconciliation exists")
         exponent = _settings(org).base_currency.exponent
-        net = BankLine.objects.filter(
+        period = BankLine.objects.filter(
             organization=org, account=rec.account, entry_date__gte=rec.start_on, entry_date__lte=rec.end_on
-        ).aggregate(total=Sum("amount"))["total"] or Decimal("0")
+        )
+        if period.exclude(status__in=[BankLine.Status.MATCHED, BankLine.Status.CATEGORIZED]).exists():
+            raise AuthAPIError("recon_unresolved", "Unresolved statement lines remain")
+        net = period.aggregate(total=Sum("amount"))["total"] or Decimal("0")
         net = quantize_amount(net, exponent)
         if rec.opening + net != rec.closing:
             raise AuthAPIError("recon_imbalanced", "Opening plus statement lines must equal closing")
+        from apps.finance.models import JournalLine
+
+        agg = JournalLine.objects.filter(
+            organization=org,
+            account=rec.account,
+            journal__status=JournalEntry.Status.POSTED,
+            journal__entry_date__lte=rec.end_on,
+        ).aggregate(d=Sum("debit"), c=Sum("credit"))
+        rec.book_balance = quantize_amount((agg["d"] or 0) - (agg["c"] or 0), exponent)
         rec.status = BankReconciliation.Status.COMPLETE
-        rec.save(update_fields=["status"])
+        rec.save(update_fields=["status", "book_balance"])
         FinanceAuditEvent.objects.create(
             organization=org,
             actor_user_id=user_id,
@@ -456,6 +514,47 @@ def complete_reconciliation(*, user_id, org, recon_id):
             payload={"opening": str(rec.opening), "closing": str(rec.closing)},
         )
         return rec
+
+
+def recon_evidence(org, rec: BankReconciliation):
+    period = BankLine.objects.filter(
+        organization=org, account=rec.account, entry_date__gte=rec.start_on, entry_date__lte=rec.end_on
+    )
+    cleared = period.filter(status__in=[BankLine.Status.MATCHED, BankLine.Status.CATEGORIZED])
+    outstanding_statement = [
+        {"id": x.id, "entry_date": x.entry_date.isoformat(), "amount": str(x.amount), "description": x.description, "status": x.status}
+        for x in period.exclude(status__in=[BankLine.Status.MATCHED, BankLine.Status.CATEGORIZED])
+    ]
+    linked = set(period.exclude(journal_id=None).values_list("journal_id", flat=True))
+    uncleared_book = []
+    for line in JournalLine.objects.filter(
+        organization=org,
+        account=rec.account,
+        journal__status=JournalEntry.Status.POSTED,
+        journal__entry_date__gte=rec.start_on,
+        journal__entry_date__lte=rec.end_on,
+    ).select_related("journal"):
+        if line.journal_id in linked:
+            continue
+        uncleared_book.append(
+            {
+                "journal_id": line.journal_id,
+                "entry_date": line.journal.entry_date.isoformat(),
+                "debit": str(line.debit),
+                "credit": str(line.credit),
+                "description": line.description,
+            }
+        )
+    difference = rec.book_balance - rec.closing
+    return {
+        "opening": str(rec.opening),
+        "closing": str(rec.closing),
+        "book_balance": str(rec.book_balance),
+        "cleared_count": cleared.count(),
+        "outstanding_statement": outstanding_statement,
+        "uncleared_book": uncleared_book,
+        "difference": str(difference),
+    }
 
 
 def reopen_reconciliation(*, user_id, org, recon_id, reason):

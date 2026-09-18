@@ -84,6 +84,23 @@ def test_xlsx_import_match_categorize_reports(api, rsa_keys, auth_user):
             format="json", **_h(token, org["id"], HTTP_IDEMPOTENCY_KEY="bank-pay"),
         )
         assert pay.status_code == 201, pay.content
+        preview = api.post(
+            "/api/v1/finance/bank-statements",
+            {
+                "account_id": cash["id"],
+                "dry_run": "true",
+                "file": SimpleUploadedFile(
+                    "p.csv", b"date,amount,description\n2026-06-10,-1,preview\n", content_type="text/csv"
+                ),
+            },
+            **_h(token, org["id"]),
+        )
+        assert preview.status_code == 200, preview.content
+        assert preview.json()["data"]["dry_run"] is True
+        assert preview.json()["data"]["created"]
+        from apps.finance.models import BankLine
+
+        assert not BankLine.objects.filter(description="preview").exists()
         before = _tb(api, token, org["id"])
         xlsx = SimpleUploadedFile(
             "stmt.xlsx",
@@ -104,20 +121,6 @@ def test_xlsx_import_match_categorize_reports(api, rsa_keys, auth_user):
         created = imported.json()["data"]["created"]
         assert len(created) == 3
         assert imported.json()["data"]["duplicates"] == []
-        csv_file = SimpleUploadedFile(
-            "stmt.csv",
-            b"date,amount,description\n2026-06-10,-60,Vendor pay\n2026-06-10,-15,Bank fee\n2026-06-12,-20,Wire\n",
-            content_type="text/csv",
-        )
-        again = api.post(
-            "/api/v1/finance/bank-statements",
-            {"account_id": cash["id"], "file": csv_file},
-            **_h(token, org["id"]),
-        )
-        assert again.status_code == 201, again.content
-        assert again.json()["data"]["created"] == []
-        assert len(again.json()["data"]["duplicates"]) == 3
-
         pay_line = next(x for x in created if Decimal(x["amount"]) == Decimal("-60"))
         fee_line = next(x for x in created if Decimal(x["amount"]) == Decimal("-15"))
         wire_line = next(x for x in created if Decimal(x["amount"]) == Decimal("-20"))
@@ -174,6 +177,51 @@ def test_xlsx_import_match_categorize_reports(api, rsa_keys, auth_user):
         )
         assert done.status_code == 200, done.content
         assert done.json()["data"]["status"] == "complete"
+        assert "uncleared_book" in done.json()["data"]
+        assert "difference" in done.json()["data"]
+        locked_je = api.post(
+            "/api/v1/finance/journals",
+            {
+                "entry_date": "2026-06-16",
+                "lines": [
+                    {"account_id": cash["id"], "debit": "1", "credit": "0"},
+                    {"account_id": expense["id"], "debit": "0", "credit": "1"},
+                ],
+            },
+            format="json", **_h(token, org["id"]),
+        ).json()["data"]
+        blocked = api.post(
+            f"/api/v1/finance/journals/{locked_je['id']}/post",
+            {"version": 1},
+            format="json", **_h(token, org["id"], HTTP_IDEMPOTENCY_KEY="after-recon"),
+        )
+        assert blocked.json()["error"]["code"] == "recon_locked"
+        overlap = api.post(
+            "/api/v1/finance/bank-reconciliations",
+            {
+                "account_id": cash["id"], "start_on": "2026-06-15", "end_on": "2026-07-15",
+                "opening": "0", "closing": "0",
+            },
+            format="json", **_h(token, org["id"]),
+        )
+        clash = api.post(
+            f"/api/v1/finance/bank-reconciliations/{overlap.json()['data']['id']}/complete",
+            format="json", **_h(token, org["id"]),
+        )
+        assert clash.json()["error"]["code"] == "recon_overlap"
+        csv_file = SimpleUploadedFile(
+            "stmt.csv",
+            b"date,amount,description\n2026-06-10,-60,Vendor pay\n2026-06-10,-15,Bank fee\n2026-06-12,-20,Wire\n",
+            content_type="text/csv",
+        )
+        again = api.post(
+            "/api/v1/finance/bank-statements",
+            {"account_id": cash["id"], "file": csv_file},
+            **_h(token, org["id"]),
+        )
+        assert again.status_code == 201, again.content
+        assert again.json()["data"]["created"] == []
+        assert len(again.json()["data"]["duplicates"]) == 3
         pnl = api.get(
             "/api/v1/finance/reports/profit-loss?from=2026-01-01&to=2026-12-31", **_h(token, org["id"])
         ).json()["data"]

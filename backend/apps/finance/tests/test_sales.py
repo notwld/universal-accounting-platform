@@ -259,10 +259,16 @@ def test_fx_invoice_and_settlement(api, rsa_keys, auth_user):
         missing = api.post(
             "/api/v1/finance/invoices",
             {
-                "contact_id": contact["id"], "entry_date": "2026-05-01", "currency": "EUR",
+                "contact_id": contact["id"], "entry_date": "2026-05-01", "currency": "GBP",
                 "lines": [{"item_id": item_fx["id"], "quantity": "1", "unit_price": "100"}],
             },
             format="json", **_h(token, org["id"]),
         )
         assert missing.status_code == 422
         assert missing.json()["error"]["code"] == "missing_rate"
+        zero = api.post(
+            "/api/v1/finance/exchange-rates",
+            {"currency": "EUR", "rate": "0", "as_of": "2026-06-01"},
+            format="json", **_h(token, org["id"]),
+        )
+        assert zero.json()["error"]["code"] == "validation_error"

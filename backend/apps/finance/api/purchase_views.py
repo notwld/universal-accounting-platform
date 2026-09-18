@@ -8,15 +8,17 @@ from apps.authentication.permissions.authenticated import IsApplicationUser
 from apps.finance.api.views import ORG_HEADER, _org_action
 from apps.finance.models import (
     Bill,
+    Contact,
     CreditNote,
     FinanceAttachment,
     Invoice,
+    Item,
     PaidExpense,
     PaymentRun,
     PurchaseOrder,
     PurchaseOrderLine,
+    TaxRate,
     VendorCredit,
-    VendorCreditLine,
     VendorPayment,
 )
 from apps.finance.models.attachments import ALLOWED_TYPES, MAX_BYTES
@@ -24,15 +26,16 @@ from apps.finance.selectors.aging import ap_aging
 from apps.finance.services.purchases import (
     bill_preview,
     convert_po,
+    create_and_post_vendor_credit,
+    create_and_post_vendor_payment,
     post_bill,
     post_expense,
     post_payment_run,
-    post_vendor_credit,
-    post_vendor_payment,
     refund_vendor_payment,
     set_bill_lines,
     vendor_statement,
 )
+from apps.finance.services.resolve import currency_get, org_get, org_get_optional
 
 
 class BillListCreateView(APIView):
@@ -57,10 +60,10 @@ class BillListCreateView(APIView):
         due = request.data.get("due_date") or request.data.get("entry_date")
         bill = Bill.objects.create(
             organization=org,
-            contact_id=request.data.get("contact_id"),
+            contact=org_get(Contact, org, request.data.get("contact_id")),
             entry_date=request.data.get("entry_date"),
             due_date=due,
-            currency_id=request.data.get("currency"),
+            currency=currency_get(request.data.get("currency")),
             fx_rate=request.data.get("fx_rate") or 1,
             created_by=user.id,
         )
@@ -135,28 +138,8 @@ class VendorCreditCreateView(APIView):
     @extend_schema(tags=["Finance"], parameters=[ORG_HEADER])
     def post(self, request):
         user, org = _org_action(request, "finance.document.post")
-        cn = VendorCredit.objects.create(
-            organization=org,
-            contact_id=request.data.get("contact_id"),
-            bill_id=request.data.get("bill_id"),
-            entry_date=request.data.get("entry_date"),
-            currency_id=request.data.get("currency"),
-            fx_rate=request.data.get("fx_rate") or 1,
-            total=request.data.get("total") or 0,
-            base_total=request.data.get("base_total") or 0,
-        )
-        for line in request.data.get("lines") or []:
-            VendorCreditLine.objects.create(
-                credit=cn, organization=org,
-                description=line.get("description") or "",
-                expense_account_id=line.get("expense_account_id"),
-                net=line.get("net") or 0, tax_amount=line.get("tax_amount") or 0,
-                total=line.get("total") or 0, base_net=line.get("base_net") or 0,
-                base_tax=line.get("base_tax") or 0, base_total=line.get("base_total") or 0,
-                tax_payable_account_id=line.get("tax_payable_account_id"),
-            )
-        posted = post_vendor_credit(
-            user_id=user.id, org=org, credit=cn,
+        posted = create_and_post_vendor_credit(
+            user_id=user.id, org=org, payload=request.data,
             idempotency_key=request.headers.get("Idempotency-Key"),
         )
         return envelope_success(request, {"id": posted.id, "status": posted.status, "number": posted.number}, http_status=201)
@@ -168,18 +151,8 @@ class VendorPaymentCreateView(APIView):
     @extend_schema(tags=["Finance"], parameters=[ORG_HEADER])
     def post(self, request):
         user, org = _org_action(request, "finance.payment.record")
-        pay = VendorPayment.objects.create(
-            organization=org,
-            contact_id=request.data.get("contact_id"),
-            bank_account_id=request.data.get("bank_account_id"),
-            entry_date=request.data.get("entry_date"),
-            currency_id=request.data.get("currency"),
-            fx_rate=request.data.get("fx_rate") or 1,
-            amount=request.data.get("amount"),
-        )
-        posted = post_vendor_payment(
-            user_id=user.id, org=org, payment=pay,
-            allocations=request.data.get("allocations") or [],
+        posted = create_and_post_vendor_payment(
+            user_id=user.id, org=org, payload=request.data,
             idempotency_key=request.headers.get("Idempotency-Key"),
         )
         return envelope_success(request, {"id": posted.id, "status": posted.status, "amount": str(posted.amount)}, http_status=201)
@@ -191,9 +164,7 @@ class VendorRefundCreateView(APIView):
     @extend_schema(tags=["Finance"], parameters=[ORG_HEADER])
     def post(self, request):
         user, org = _org_action(request, "finance.payment.record")
-        pay = VendorPayment.objects.filter(id=request.data.get("payment_id"), organization=org).first()
-        if not pay:
-            raise AuthAPIError("cross_organization", "Payment not found")
+        pay = org_get(VendorPayment, org, request.data.get("payment_id"), "Payment not found")
         ref = refund_vendor_payment(
             user_id=user.id, org=org, payment=pay, amount=request.data.get("amount"),
             bank_account_id=request.data.get("bank_account_id"),
@@ -235,7 +206,7 @@ class APAgingView(APIView):
         as_of = request.query_params.get("as_of")
         if not as_of:
             raise AuthAPIError("validation_error", "as_of is required")
-        return envelope_success(request, {"items": ap_aging(org=org, as_of=as_of)})
+        return envelope_success(request, ap_aging(org=org, as_of=as_of))
 
 
 class PurchaseOrderListCreateView(APIView):
@@ -252,15 +223,15 @@ class PurchaseOrderListCreateView(APIView):
         _, org = _org_action(request, "finance.bill.create")
         po = PurchaseOrder.objects.create(
             organization=org,
-            contact_id=request.data.get("contact_id"),
+            contact=org_get(Contact, org, request.data.get("contact_id")),
             entry_date=request.data.get("entry_date"),
-            currency_id=request.data.get("currency"),
+            currency=currency_get(request.data.get("currency")),
         )
         for line in request.data.get("lines") or []:
             PurchaseOrderLine.objects.create(
-                purchase_order=po, organization=org, item_id=line.get("item_id"),
+                purchase_order=po, organization=org, item=org_get(Item, org, line.get("item_id")),
                 description=line.get("description") or "", quantity=line.get("quantity") or 1,
-                unit_price=line.get("unit_price"), tax_rate_id=line.get("tax_rate_id"),
+                unit_price=line.get("unit_price"), tax_rate=org_get_optional(TaxRate, org, line.get("tax_rate_id")),
             )
         return envelope_success(request, _po(po), http_status=201)
 
@@ -338,6 +309,19 @@ class AttachmentListCreateView(APIView):
         _require_host(org, object_type, object_id)
         content_type = uploaded.content_type or ""
         if content_type not in ALLOWED_TYPES:
+            raise AuthAPIError("validation_error", "File type is not allowed")
+        head = uploaded.read(16)
+        uploaded.seek(0)
+        sniffed = ""
+        if head.startswith(b"%PDF"):
+            sniffed = "application/pdf"
+        elif head.startswith(b"\x89PNG"):
+            sniffed = "image/png"
+        elif head.startswith(b"\xff\xd8"):
+            sniffed = "image/jpeg"
+        elif head.startswith(b"RIFF") and b"WEBP" in head:
+            sniffed = "image/webp"
+        if sniffed != content_type:
             raise AuthAPIError("validation_error", "File type is not allowed")
         if uploaded.size > MAX_BYTES:
             raise AuthAPIError("validation_error", "File is too large")

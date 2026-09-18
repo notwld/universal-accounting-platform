@@ -93,6 +93,7 @@ def upsert_settings(*, org: Organization, payload: dict) -> FinanceSettings:
         ("vendor_advance_account_id", "vendor_advance_account_id"),
         ("inventory_account_id", "inventory_account_id"),
         ("cogs_account_id", "cogs_account_id"),
+        ("retained_earnings_account_id", "retained_earnings_account_id"),
     ):
         if payload.get(key):
             acc = Account.objects.filter(id=payload[key], organization=org).first()

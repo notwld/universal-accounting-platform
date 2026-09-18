@@ -9,10 +9,18 @@ class BankStatement(models.Model):
     organization = models.ForeignKey("tenancy.Organization", on_delete=models.PROTECT)
     account = models.ForeignKey("finance.Account", on_delete=models.PROTECT)
     original_name = models.CharField(max_length=255, blank=True, default="")
+    file_hash = models.CharField(max_length=64, blank=True, default="")
     imported_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         db_table = "finance_bank_statement"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "account", "file_hash"],
+                condition=~Q(file_hash=""),
+                name="uniq_finance_bank_statement_hash",
+            ),
+        ]
 
 
 class BankLine(models.Model):
@@ -20,6 +28,7 @@ class BankLine(models.Model):
         IMPORTED = "imported"
         MATCHED = "matched"
         CATEGORIZED = "categorized"
+        REVIEW = "review"
 
     id = models.CharField(primary_key=True, max_length=36, default=new_uuid, editable=False)
     organization = models.ForeignKey("tenancy.Organization", on_delete=models.PROTECT)
@@ -29,6 +38,10 @@ class BankLine(models.Model):
     amount = models.DecimalField(max_digits=20, decimal_places=8)
     description = models.CharField(max_length=255, blank=True, default="")
     fingerprint = models.CharField(max_length=64)
+    parser_version = models.CharField(max_length=16, blank=True, default="1")
+    source_row = models.PositiveIntegerField(default=0)
+    raw = models.JSONField(default=dict, blank=True)
+    review_reason = models.CharField(max_length=64, blank=True, default="")
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.IMPORTED)
     customer_payment = models.ForeignKey(
         "finance.CustomerPayment", null=True, blank=True, on_delete=models.PROTECT
@@ -41,10 +54,6 @@ class BankLine(models.Model):
     class Meta:
         db_table = "finance_bank_line"
         constraints = [
-            models.UniqueConstraint(
-                fields=["organization", "account", "fingerprint"],
-                name="uniq_finance_bank_line_fingerprint",
-            ),
             models.UniqueConstraint(
                 fields=["customer_payment"],
                 condition=Q(customer_payment__isnull=False),
@@ -70,6 +79,7 @@ class BankReconciliation(models.Model):
     end_on = models.DateField()
     opening = models.DecimalField(max_digits=20, decimal_places=8)
     closing = models.DecimalField(max_digits=20, decimal_places=8)
+    book_balance = models.DecimalField(max_digits=20, decimal_places=8, default=0)
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.OPEN)
     reopen_reason = models.TextField(blank=True, default="")
 

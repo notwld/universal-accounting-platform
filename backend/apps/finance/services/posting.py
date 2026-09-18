@@ -2,7 +2,7 @@ import hashlib
 import json
 from decimal import Decimal
 
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from apps.authentication.exceptions import AuthAPIError
@@ -37,15 +37,42 @@ def _begin_idempotency(org, operation, key, body):
             raise AuthAPIError("idempotency_conflict", "Idempotency key reused with different payload")
         return existing, True
     try:
-        rec = FinanceIdempotency.objects.create(
-            organization=org, operation=operation, key=key, request_hash=request_hash
-        )
-        return rec, False
+        with transaction.atomic():
+            rec = FinanceIdempotency.objects.create(
+                organization=org, operation=operation, key=key, request_hash=request_hash, status="in_progress"
+            )
+            return rec, False
     except IntegrityError:
-        existing = FinanceIdempotency.objects.get(organization=org, operation=operation, key=key)
+        existing = FinanceIdempotency.objects.filter(
+            organization=org, operation=operation, key=key
+        ).select_related("journal").first()
+        if not existing:
+            raise
         if existing.request_hash != request_hash:
             raise AuthAPIError("idempotency_conflict", "Idempotency key reused with different payload")
         return existing, True
+
+
+begin_command = _begin_idempotency
+
+
+def finish_command(rec, *, resource_type="", resource_id="", journal=None):
+    rec.status = "succeeded"
+    rec.resource_type = resource_type
+    rec.resource_id = resource_id or ""
+    if journal is not None:
+        rec.journal = journal
+    rec.save(update_fields=["status", "resource_type", "resource_id", "journal"])
+
+
+def replay_resource(rec, model):
+    if rec.resource_id:
+        obj = model.objects.filter(pk=rec.resource_id).first()
+        if obj:
+            return obj
+    if rec.journal_id:
+        return rec.journal
+    raise AuthAPIError("idempotency_conflict", "Idempotency key in progress")
 
 
 def _lock_period(org, entry_date):
@@ -77,6 +104,7 @@ CONTROL_SOURCES = {
     JournalEntry.Source.VENDOR_CREDIT,
     JournalEntry.Source.VENDOR_REFUND,
     JournalEntry.Source.ASSET,
+    JournalEntry.Source.CLOSE,
 }
 
 
@@ -165,12 +193,23 @@ def _post_journal(*, user_id, org, journal_id, version, idempotency_key, body):
         raise AuthAPIError("cross_organization", "Journal not found")
     if journal.status == JournalEntry.Status.POSTED:
         rec.journal = journal
-        rec.save(update_fields=["journal"])
+        rec.status = "succeeded"
+        rec.save(update_fields=["journal", "status"])
         return journal
     if journal.version != version:
         raise AuthAPIError("stale_version", "Journal version mismatch")
     settings = _settings(org)
     lines = list(journal.lines.select_related("account").all())
+    from apps.finance.models import BankReconciliation
+
+    if BankReconciliation.objects.filter(
+        organization=org,
+        status=BankReconciliation.Status.COMPLETE,
+        start_on__lte=journal.entry_date,
+        end_on__gte=journal.entry_date,
+        account_id__in=[line.account_id for line in lines],
+    ).exists():
+        raise AuthAPIError("recon_locked", "Account is locked by a completed reconciliation")
     prepared, _ = _validate_lines(org, journal.source_type, lines, settings.base_currency.exponent)
     for line, (account, desc, debit, credit) in zip(lines, prepared, strict=True):
         line.debit = debit
@@ -190,7 +229,11 @@ def _post_journal(*, user_id, org, journal_id, version, idempotency_key, body):
         updated_at=timezone.now(),
     )
     rec.journal = journal
-    rec.save(update_fields=["journal"])
+    rec.status = "succeeded"
+    rec.save(update_fields=["journal", "status"])
+    from apps.authentication import metrics
+
+    metrics.incr("finance_post_total")
     FinanceAuditEvent.objects.create(
         organization=org,
         actor_user_id=user_id,
@@ -226,7 +269,8 @@ def post_generated(*, user_id, org, entry_date, source_type, memo, gl_lines, ide
         body=body,
     )
     rec.journal = posted
-    rec.save(update_fields=["journal"])
+    rec.status = "succeeded"
+    rec.save(update_fields=["journal", "status"])
     return posted
 
 
@@ -275,7 +319,8 @@ def reverse_journal(*, user_id, org, journal_id, reason, entry_date, idempotency
         )
         JournalEntry.objects.filter(pk=original.pk).update(reversed_by=posted, updated_at=timezone.now())
         rec.journal = posted
-        rec.save(update_fields=["journal"])
+        rec.status = "succeeded"
+        rec.save(update_fields=["journal", "status"])
         FinanceAuditEvent.objects.create(
             organization=org,
             actor_user_id=user_id,

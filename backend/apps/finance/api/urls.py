@@ -5,6 +5,7 @@ from apps.finance.api.views import (
     AccountListCreateView,
     BalanceSheetView,
     CashFlowView,
+    TaxSummaryView,
     GeneralLedgerView,
     GrantDetailView,
     GrantListView,
@@ -19,6 +20,8 @@ from apps.finance.api.views import (
     RoleListCreateView,
     SettingsView,
     TrialBalanceView,
+    EquityMovementView,
+    BooksExportView,
 )
 from apps.finance.api.asset_views import (
     AssetDepreciateView,
@@ -124,6 +127,9 @@ urlpatterns = [
     path("reports/profit-loss", ProfitLossView.as_view(), name="finance-profit-loss"),
     path("reports/balance-sheet", BalanceSheetView.as_view(), name="finance-balance-sheet"),
     path("reports/cash-flow", CashFlowView.as_view(), name="finance-cash-flow"),
+    path("reports/tax-summary", TaxSummaryView.as_view(), name="finance-tax-summary"),
+    path("reports/equity-movement", EquityMovementView.as_view(), name="finance-equity-movement"),
+    path("export", BooksExportView.as_view(), name="finance-export"),
     path("reports/inventory-valuation", InventoryValuationView.as_view(), name="finance-inventory-valuation"),
     path("reports/asset-register", AssetRegisterView.as_view(), name="finance-asset-register"),
     path("reports/ar-aging", ARAgingView.as_view(), name="finance-ar-aging"),

@@ -16,6 +16,7 @@ from apps.finance.services.banking import (
     fetch_bank_feed,
     import_statement,
     match_line,
+    recon_evidence,
     reopen_reconciliation,
     update_bank_rule,
 )
@@ -41,6 +42,7 @@ def _line(line: BankLine):
 
 
 def _recon(rec: BankReconciliation):
+    pack = recon_evidence(rec.organization, rec)
     return {
         "id": rec.id,
         "account_id": rec.account_id,
@@ -48,8 +50,13 @@ def _recon(rec: BankReconciliation):
         "end_on": _iso(rec.end_on),
         "opening": str(rec.opening),
         "closing": str(rec.closing),
+        "book_balance": str(rec.book_balance),
         "status": rec.status,
         "reopen_reason": rec.reopen_reason,
+        "cleared_count": pack["cleared_count"],
+        "outstanding_statement": pack["outstanding_statement"],
+        "uncleared_book": pack["uncleared_book"],
+        "difference": pack["difference"],
     }
 
 
@@ -64,19 +71,21 @@ class BankStatementImportView(APIView):
         if not uploaded:
             raise AuthAPIError("validation_error", "file is required")
         statement, created, duplicates, categorized = import_statement(
-            user_id=user.id, org=org, account_id=request.data.get("account_id"), uploaded=uploaded
+            user_id=user.id,
+            org=org,
+            account_id=request.data.get("account_id"),
+            uploaded=uploaded,
+            dry_run=str(request.data.get("dry_run") or "").lower() in ("1", "true", "yes"),
         )
-        return envelope_success(
-            request,
-            {
-                "id": statement.id,
-                "account_id": statement.account_id,
-                "created": [_line(x) for x in created],
-                "duplicates": duplicates,
-                "categorized": [_line(x) for x in categorized],
-            },
-            http_status=201,
-        )
+        payload = {
+            "id": None if statement is None else statement.id,
+            "account_id": request.data.get("account_id"),
+            "created": created if statement is None else [_line(x) for x in created],
+            "duplicates": duplicates,
+            "categorized": [] if statement is None else [_line(x) for x in categorized],
+            "dry_run": statement is None,
+        }
+        return envelope_success(request, payload, http_status=200 if statement is None else 201)
 
 
 class BankLineListView(APIView):

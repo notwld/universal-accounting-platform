@@ -10,7 +10,7 @@ from apps.finance.models import (
     Warehouse,
 )
 from apps.finance.services.context import finance_tx
-from apps.finance.services.money import quantize_amount
+from apps.finance.services.money import quantize_amount, quantize_quantity, quantize_unit_cost
 from apps.finance.services.posting import post_generated
 
 
@@ -40,29 +40,29 @@ def _balance(*, org, warehouse, item):
     return StockBalance.objects.select_for_update().get(pk=bal.pk)
 
 
-def _avg(bal: StockBalance, exponent: int) -> Decimal:
+def _avg(bal: StockBalance, money_exp: int):
     if bal.qty <= 0:
         return Decimal("0")
-    return quantize_amount(bal.value / bal.qty, exponent)
+    return quantize_unit_cost(bal.value / bal.qty)
 
 
 def _move(*, org, warehouse, item, kind, qty, unit_cost, source_type, source_id, entry_date, exponent):
-    qty = Decimal(str(qty))
+    qty = quantize_quantity(qty)
     bal = _balance(org=org, warehouse=warehouse, item=item)
     if qty > 0:
-        unit_cost = quantize_amount(Decimal(str(unit_cost)), exponent)
+        unit_cost = quantize_unit_cost(unit_cost)
         value = quantize_amount(qty * unit_cost, exponent)
-        bal.qty = quantize_amount(bal.qty + qty, exponent)
+        bal.qty = quantize_quantity(bal.qty + qty)
         bal.value = quantize_amount(bal.value + value, exponent)
     else:
         need = -qty
         avg = _avg(bal, exponent)
         given = Decimal(str(unit_cost or 0))
-        unit_cost = quantize_amount(given if given else avg, exponent)
+        unit_cost = quantize_unit_cost(given if given else avg)
         if bal.qty < need:
             raise AuthAPIError("negative_stock", "Insufficient stock")
         value = quantize_amount(need * unit_cost, exponent)
-        bal.qty = quantize_amount(bal.qty - need, exponent)
+        bal.qty = quantize_quantity(bal.qty - need)
         bal.value = quantize_amount(bal.value - value, exponent)
         if bal.qty == 0:
             bal.value = Decimal("0")
@@ -162,6 +162,30 @@ def reverse_moves(*, org, source_type, source_id, entry_date, new_source_type, n
     return gl_value
 
 
+def return_qty(*, org, item, qty, unit_cost, source_type, source_id, entry_date, inbound: bool, warehouse=None):
+    """inbound=True restores sales issues; inbound=False removes purchase receipts."""
+    qty = quantize_quantity(qty)
+    if not item.tracked or qty <= 0:
+        return Decimal("0")
+    settings = _settings(org)
+    require_stock_accounts(settings)
+    wh = warehouse or default_warehouse(org)
+    signed = qty if inbound else -qty
+    _cost, value = _move(
+        org=org,
+        warehouse=wh,
+        item=item,
+        kind=StockMove.Kind.RECEIVE if inbound else StockMove.Kind.ISSUE,
+        qty=signed,
+        unit_cost=unit_cost,
+        source_type=source_type,
+        source_id=source_id,
+        entry_date=entry_date,
+        exponent=settings.base_currency.exponent,
+    )
+    return value
+
+
 def adjust_stock(*, user_id, org, warehouse_id, item_id, quantity, unit_cost, entry_date, idempotency_key):
     settings = _settings(org)
     require_stock_accounts(settings)
@@ -245,7 +269,7 @@ def valuation(*, org):
                 "sku": bal.item.sku,
                 "warehouse_id": bal.warehouse_id,
                 "warehouse": bal.warehouse.name,
-                "qty": str(quantize_amount(bal.qty, exponent)),
+                "qty": str(quantize_quantity(bal.qty)),
                 "value": str(quantize_amount(bal.value, exponent)),
             }
         )
@@ -261,3 +285,13 @@ def valuation(*, org):
         ).aggregate(d=Sum("debit"), c=Sum("credit"))
         gl = quantize_amount((agg["d"] or 0) - (agg["c"] or 0), exponent)
     return {"items": rows, "stock_total": str(quantize_amount(total, exponent)), "gl_inventory": str(gl)}
+
+
+def audit_qty_currency_rounding(*, org):
+    settings = _settings(org)
+    exp = settings.base_currency.exponent
+    hits = []
+    for bal in StockBalance.objects.filter(organization=org).select_related("item"):
+        if quantize_amount(bal.qty, exp) != quantize_quantity(bal.qty):
+            hits.append({"item_id": bal.item_id, "sku": bal.item.sku, "qty": str(bal.qty)})
+    return hits

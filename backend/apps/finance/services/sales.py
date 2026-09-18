@@ -4,8 +4,11 @@ from django.db.models import Sum
 
 from apps.authentication.exceptions import AuthAPIError
 from apps.finance.models import (
+    Account,
     Allocation,
+    Contact,
     CreditNote,
+    CreditNoteLine,
     CustomerPayment,
     CustomerRefund,
     ExchangeRate,
@@ -19,10 +22,11 @@ from apps.finance.models import (
 )
 from apps.finance.services.approvals import invalidate_approval, require_approved_for_post
 from apps.finance.services.context import finance_tx
-from apps.finance.services.money import quantize_amount
-from apps.finance.services.posting import post_generated
+from apps.finance.services.money import quantize_amount, quantize_quantity
+from apps.finance.services.posting import begin_command, finish_command, post_generated, replay_resource
+from apps.finance.services.resolve import currency_get, org_get, org_get_optional
 from apps.finance.services.sequence import next_document_number
-from apps.finance.services.stock import issue_line, reverse_moves
+from apps.finance.services.stock import issue_line, return_qty
 from apps.finance.services.tax import line_tax
 
 
@@ -40,11 +44,19 @@ def resolve_rate(org, currency_id, entry_date, base_id, explicit=None) -> Decima
         return Decimal("1")
     if explicit not in (None, ""):
         rate = Decimal(str(explicit))
+        if rate <= 0:
+            raise AuthAPIError("validation_error", "Exchange rate must be positive")
         if rate != 1:
             return rate
-    row = ExchangeRate.objects.filter(organization=org, currency_id=currency_id, as_of=entry_date).first()
+    row = (
+        ExchangeRate.objects.filter(organization=org, currency_id=currency_id, as_of__lte=entry_date)
+        .order_by("-as_of")
+        .first()
+    )
     if not row:
         raise AuthAPIError("missing_rate", "Exchange rate is required")
+    if row.rate <= 0:
+        raise AuthAPIError("validation_error", "Exchange rate must be positive")
     return row.rate
 
 
@@ -243,30 +255,76 @@ def convert_quote(quote: Quote) -> Invoice:
     return invoice
 
 
+def _credit_stock_value(*, org, credit: CreditNote):
+    from apps.finance.models import StockMove
+
+    restored = Decimal("0")
+    for line in credit.lines.select_related("item", "invoice_line", "invoice_line__item"):
+        if line.price_only:
+            continue
+        qty = quantize_quantity(line.quantity or 0)
+        if qty <= 0:
+            continue
+        item = line.item
+        if line.invoice_line_id:
+            src = InvoiceLine.objects.select_for_update().filter(
+                pk=line.invoice_line_id, organization=org
+            ).first()
+            if not src:
+                raise AuthAPIError("cross_organization", "Invoice line not found")
+            used = (
+                CreditNoteLine.objects.filter(
+                    invoice_line=src, credit_note__status=CreditNote.Status.POSTED, organization=org
+                )
+                .exclude(pk=line.pk)
+                .aggregate(s=Sum("quantity"))["s"]
+                or Decimal("0")
+            )
+            if used + qty > src.quantity:
+                raise AuthAPIError("over_allocation", "Credit quantity exceeds source line")
+            item = src.item
+        if not item or not item.tracked:
+            continue
+        move = StockMove.objects.filter(
+            organization=org,
+            source_type="invoice",
+            source_id=credit.invoice_id or "",
+            item=item,
+            kind=StockMove.Kind.ISSUE,
+        ).first()
+        restored += return_qty(
+            org=org,
+            item=item,
+            qty=qty,
+            unit_cost=move.unit_cost if move else 0,
+            source_type="credit",
+            source_id=credit.id,
+            entry_date=credit.entry_date,
+            inbound=True,
+        )
+    return restored
+
+
 def post_credit(*, user_id, org, credit: CreditNote, idempotency_key):
     settings = _settings(org)
     require_sales_accounts(settings)
     with finance_tx(user_id=user_id, organization_id=org.id):
-        cn = CreditNote.objects.select_for_update().get(pk=credit.pk)
+        cn = CreditNote.objects.select_for_update().filter(pk=credit.pk, organization=org).first()
+        if not cn:
+            raise AuthAPIError("cross_organization", "Credit note not found")
+        if cn.status == CreditNote.Status.POSTED:
+            return cn
         gl = [{"account_id": settings.ar_account_id, "debit": "0", "credit": str(cn.base_total), "description": "AR"}]
         for line in cn.lines.all():
             gl.append({"account_id": line.income_account_id, "debit": str(line.base_net), "credit": "0", "description": line.description})
             if line.base_tax and line.tax_payable_account_id:
                 gl.append({"account_id": line.tax_payable_account_id, "debit": str(line.base_tax), "credit": "0", "description": "tax"})
-        if cn.invoice_id:
-            restored = reverse_moves(
-                org=org,
-                source_type="invoice",
-                source_id=cn.invoice_id,
-                entry_date=cn.entry_date,
-                new_source_type="credit",
-                new_source_id=cn.id,
-            )
-            if restored:
-                if not settings.inventory_account_id or not settings.cogs_account_id:
-                    raise AuthAPIError("validation_error", "Inventory and COGS accounts are required")
-                gl.append({"account_id": settings.inventory_account_id, "debit": str(restored), "credit": "0", "description": "inventory"})
-                gl.append({"account_id": settings.cogs_account_id, "debit": "0", "credit": str(restored), "description": "COGS"})
+        restored = _credit_stock_value(org=org, credit=cn)
+        if restored:
+            if not settings.inventory_account_id or not settings.cogs_account_id:
+                raise AuthAPIError("validation_error", "Inventory and COGS accounts are required")
+            gl.append({"account_id": settings.inventory_account_id, "debit": str(restored), "credit": "0", "description": "inventory"})
+            gl.append({"account_id": settings.cogs_account_id, "debit": "0", "credit": str(restored), "description": "COGS"})
         posted = post_generated(
             user_id=user_id, org=org, entry_date=cn.entry_date, source_type=JournalEntry.Source.CREDIT,
             memo="credit", gl_lines=gl, idempotency_key=idempotency_key, body={"credit_id": cn.id},
@@ -276,7 +334,9 @@ def post_credit(*, user_id, org, credit: CreditNote, idempotency_key):
         cn.journal = posted
         cn.save()
         if cn.invoice_id:
-            inv = Invoice.objects.select_for_update().get(pk=cn.invoice_id)
+            inv = Invoice.objects.select_for_update().filter(pk=cn.invoice_id, organization=org).first()
+            if not inv:
+                raise AuthAPIError("cross_organization", "Invoice not found")
             remain = outstanding(inv)
             apply = min(remain, cn.total)
             if apply < cn.total:
@@ -286,6 +346,94 @@ def post_credit(*, user_id, org, credit: CreditNote, idempotency_key):
                 base_amount=cn.base_total, entry_date=cn.entry_date,
             )
         return cn
+
+
+def create_and_post_credit(*, user_id, org, payload, idempotency_key):
+    body = {
+        "contact_id": payload.get("contact_id"),
+        "invoice_id": payload.get("invoice_id"),
+        "entry_date": payload.get("entry_date"),
+        "currency": payload.get("currency"),
+        "total": str(payload.get("total") or 0),
+        "lines": payload.get("lines") or [],
+    }
+    with finance_tx(user_id=user_id, organization_id=org.id):
+        rec, replay = begin_command(org, "credit.command", idempotency_key, body)
+        if replay:
+            return replay_resource(rec, CreditNote)
+        contact = org_get(Contact, org, payload.get("contact_id"))
+        invoice = org_get_optional(Invoice, org, payload.get("invoice_id"))
+        currency = currency_get(payload.get("currency"))
+        cn = CreditNote.objects.create(
+            organization=org,
+            contact=contact,
+            invoice=invoice,
+            entry_date=payload.get("entry_date"),
+            currency=currency,
+            fx_rate=payload.get("fx_rate") or 1,
+            total=payload.get("total") or 0,
+            base_total=payload.get("base_total") or 0,
+        )
+        for line in payload.get("lines") or []:
+            src = org_get_optional(InvoiceLine, org, line.get("invoice_line_id"))
+            if src and invoice and src.invoice_id != invoice.id:
+                raise AuthAPIError("cross_organization", "Invoice line not found")
+            item = org_get(Item, org, line.get("item_id")) if line.get("item_id") else (src.item if src else None)
+            income = org_get(Account, org, line.get("income_account_id") or (item.income_account_id if item else None))
+            tax_acct = org_get_optional(Account, org, line.get("tax_payable_account_id"))
+            CreditNoteLine.objects.create(
+                credit_note=cn,
+                organization=org,
+                invoice_line=src,
+                item=item,
+                quantity=line.get("quantity") or 0,
+                price_only=bool(line.get("price_only")),
+                description=line.get("description") or "",
+                income_account=income,
+                net=line.get("net") or 0,
+                tax_amount=line.get("tax_amount") or 0,
+                total=line.get("total") or 0,
+                base_net=line.get("base_net") or 0,
+                base_tax=line.get("base_tax") or 0,
+                base_total=line.get("base_total") or 0,
+                tax_payable_account=tax_acct,
+            )
+        posted = post_credit(user_id=user_id, org=org, credit=cn, idempotency_key=f"{idempotency_key}:post")
+        finish_command(rec, resource_type="credit", resource_id=posted.id, journal=posted.journal)
+        return posted
+
+
+def create_and_post_payment(*, user_id, org, payload, idempotency_key):
+    body = {
+        "contact_id": payload.get("contact_id"),
+        "bank_account_id": payload.get("bank_account_id"),
+        "entry_date": payload.get("entry_date"),
+        "currency": payload.get("currency"),
+        "amount": str(payload.get("amount") or 0),
+        "allocations": payload.get("allocations") or [],
+    }
+    with finance_tx(user_id=user_id, organization_id=org.id):
+        rec, replay = begin_command(org, "payment.command", idempotency_key, body)
+        if replay:
+            return replay_resource(rec, CustomerPayment)
+        pay = CustomerPayment.objects.create(
+            organization=org,
+            contact=org_get(Contact, org, payload.get("contact_id")),
+            bank_account=org_get(Account, org, payload.get("bank_account_id")),
+            entry_date=payload.get("entry_date"),
+            currency=currency_get(payload.get("currency")),
+            fx_rate=payload.get("fx_rate") or 1,
+            amount=payload.get("amount"),
+        )
+        posted = post_payment(
+            user_id=user_id,
+            org=org,
+            payment=pay,
+            allocations=payload.get("allocations") or [],
+            idempotency_key=f"{idempotency_key}:post",
+        )
+        finish_command(rec, resource_type="payment", resource_id=posted.id, journal=posted.journal)
+        return posted
 
 
 def post_payment(*, user_id, org, payment: CustomerPayment, allocations: list, idempotency_key):
@@ -356,26 +504,31 @@ def refund_payment(*, user_id, org, payment: CustomerPayment, amount, bank_accou
     if not settings.advance_account_id:
         raise AuthAPIError("validation_error", "Advance account is not configured")
     amt = Decimal(str(amount))
-    allocated = Allocation.objects.filter(payment=payment).aggregate(s=Sum("amount"))["s"] or Decimal("0")
-    available = payment.amount - allocated
-    refunded = CustomerRefund.objects.filter(payment=payment).aggregate(s=Sum("amount"))["s"] or Decimal("0")
-    available -= refunded
-    if amt > available:
-        raise AuthAPIError("over_allocation", "Refund exceeds remaining advance")
-    exponent = settings.base_currency.exponent
-    base = to_base(amt, payment.fx_rate, exponent)
+    if amt <= 0:
+        raise AuthAPIError("validation_error", "Refund must be positive")
     with finance_tx(user_id=user_id, organization_id=org.id):
+        pay = CustomerPayment.objects.select_for_update().filter(pk=payment.pk, organization=org).first()
+        if not pay:
+            raise AuthAPIError("cross_organization", "Payment not found")
+        bank = org_get(Account, org, bank_account_id)
+        allocated = Allocation.objects.filter(payment=pay).aggregate(s=Sum("amount"))["s"] or Decimal("0")
+        refunded = CustomerRefund.objects.filter(payment=pay).aggregate(s=Sum("amount"))["s"] or Decimal("0")
+        available = pay.amount - allocated - refunded
+        if amt > available:
+            raise AuthAPIError("over_allocation", "Refund exceeds remaining advance")
+        exponent = settings.base_currency.exponent
+        base = to_base(amt, pay.fx_rate, exponent)
         posted = post_generated(
             user_id=user_id, org=org, entry_date=entry_date, source_type=JournalEntry.Source.REFUND,
             memo="refund",
             gl_lines=[
                 {"account_id": settings.advance_account_id, "debit": str(base), "credit": "0", "description": "advance"},
-                {"account_id": bank_account_id, "debit": "0", "credit": str(base), "description": "bank"},
+                {"account_id": bank.id, "debit": "0", "credit": str(base), "description": "bank"},
             ],
             idempotency_key=idempotency_key,
-            body={"payment_id": payment.id, "amount": str(amt)},
+            body={"payment_id": pay.id, "amount": str(amt)},
         )
         return CustomerRefund.objects.create(
-            organization=org, payment=payment, amount=amt, entry_date=entry_date,
-            bank_account_id=bank_account_id, journal=posted,
+            organization=org, payment=pay, amount=amt, entry_date=entry_date,
+            bank_account=bank, journal=posted,
         )

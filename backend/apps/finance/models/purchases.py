@@ -1,4 +1,5 @@
 from django.db import models
+from django.db.models import Q
 
 from apps.authentication.ids import new_uuid
 
@@ -86,6 +87,12 @@ class VendorCreditLine(models.Model):
     id = models.CharField(primary_key=True, max_length=36, default=new_uuid, editable=False)
     credit = models.ForeignKey(VendorCredit, on_delete=models.CASCADE, related_name="lines")
     organization = models.ForeignKey("tenancy.Organization", on_delete=models.PROTECT)
+    bill_line = models.ForeignKey(
+        BillLine, null=True, blank=True, on_delete=models.PROTECT, related_name="credit_lines"
+    )
+    item = models.ForeignKey("finance.Item", null=True, blank=True, on_delete=models.PROTECT)
+    quantity = models.DecimalField(max_digits=20, decimal_places=8, default=0)
+    price_only = models.BooleanField(default=False)
     description = models.CharField(max_length=255, blank=True, default="")
     expense_account = models.ForeignKey("finance.Account", on_delete=models.PROTECT)
     net = models.DecimalField(max_digits=20, decimal_places=8, default=0)
@@ -138,6 +145,13 @@ class BillAllocation(models.Model):
 
     class Meta:
         db_table = "finance_bill_allocation"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["payment", "bill"],
+                condition=Q(payment__isnull=False),
+                name="uniq_finance_bill_allocation_payment_bill",
+            )
+        ]
 
 
 class VendorRefund(models.Model):

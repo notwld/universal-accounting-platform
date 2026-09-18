@@ -1,7 +1,7 @@
 from datetime import date, timedelta
 from decimal import Decimal
 
-from django.db.models import Sum
+from django.db.models import Count, Sum
 
 from apps.finance.models import JournalEntry, JournalLine
 from apps.finance.services.money import quantize_amount
@@ -21,23 +21,44 @@ def _posted_lines(*, org, start=None, end=None, as_of=None, tag_id=None):
 
 
 def trial_balance(*, org, start, end, exponent: int, tag_id=None):
-    qs = _posted_lines(org=org, start=start, end=end, tag_id=tag_id)
-    rows = (
-        qs.values("account_id", "account__code", "account__name")
+    start_d = date.fromisoformat(str(start)[:10])
+    end_d = date.fromisoformat(str(end)[:10])
+    opening_end = start_d - timedelta(days=1)
+    opening_rows = (
+        _posted_lines(org=org, end=opening_end.isoformat(), tag_id=tag_id)
+        .values("account_id", "account__code", "account__name")
         .annotate(debit=Sum("debit"), credit=Sum("credit"))
-        .order_by("account__code")
     )
+    period_rows = (
+        _posted_lines(org=org, start=start, end=end, tag_id=tag_id)
+        .values("account_id", "account__code", "account__name")
+        .annotate(debit=Sum("debit"), credit=Sum("credit"), line_count=Count("id"))
+    )
+    opening = {row["account_id"]: row for row in opening_rows}
+    period = {row["account_id"]: row for row in period_rows}
     out = []
-    for row in rows:
-        debit = quantize_amount(row["debit"] or 0, exponent)
-        credit = quantize_amount(row["credit"] or 0, exponent)
+    for aid in sorted(set(opening) | set(period), key=lambda i: (opening.get(i) or period[i])["account__code"]):
+        o = opening.get(aid) or {}
+        p = period.get(aid) or {}
+        od = quantize_amount(o.get("debit") or 0, exponent)
+        oc = quantize_amount(o.get("credit") or 0, exponent)
+        pd = quantize_amount(p.get("debit") or 0, exponent)
+        pc = quantize_amount(p.get("credit") or 0, exponent)
+        onet = od - oc
+        cnet = onet + pd - pc
+        meta = p or o
         out.append(
             {
-                "account_id": row["account_id"],
-                "code": row["account__code"],
-                "name": row["account__name"],
-                "debit": str(debit),
-                "credit": str(credit),
+                "account_id": aid,
+                "code": meta["account__code"],
+                "name": meta["account__name"],
+                "opening_debit": str(quantize_amount(onet if onet > 0 else 0, exponent)),
+                "opening_credit": str(quantize_amount(-onet if onet < 0 else 0, exponent)),
+                "debit": str(pd),
+                "credit": str(pc),
+                "closing_debit": str(quantize_amount(cnet if cnet > 0 else 0, exponent)),
+                "closing_credit": str(quantize_amount(-cnet if cnet < 0 else 0, exponent)),
+                "line_count": int(p.get("line_count") or 0),
             }
         )
     return out
@@ -231,3 +252,84 @@ def cash_flow(*, org, start, end, exponent: int):
         "cash_change": str(quantize_amount(cash_close - cash_open, exponent)),
         "items": items,
     }
+
+
+def tax_summary(*, org, start, end, exponent: int):
+    from apps.finance.models import TaxRate
+
+    ids = list(TaxRate.objects.filter(organization=org).values_list("payable_account_id", flat=True))
+    qs = _posted_lines(org=org, start=start, end=end)
+    if ids:
+        qs = qs.filter(account_id__in=ids)
+    else:
+        qs = qs.none()
+    items = []
+    total = Decimal("0")
+    for row in qs.values("account_id", "account__code", "account__name").annotate(debit=Sum("debit"), credit=Sum("credit")):
+        net = quantize_amount((row["credit"] or 0) - (row["debit"] or 0), exponent)
+        total += net
+        items.append(
+            {
+                "account_id": row["account_id"],
+                "code": row["account__code"],
+                "name": row["account__name"],
+                "amount": str(net),
+            }
+        )
+    return {"items": items, "total": str(quantize_amount(total, exponent))}
+
+
+def equity_movement(*, org, start, end, exponent: int):
+    start_d = date.fromisoformat(str(start)[:10])
+    opening = balance_sheet(org=org, as_of=(start_d - timedelta(days=1)).isoformat(), exponent=exponent)
+    closing = balance_sheet(org=org, as_of=end, exponent=exponent)
+    pnl = profit_loss(org=org, start=start, end=end, exponent=exponent)
+    return {
+        "opening_equity": opening["equity_total"],
+        "net_income": pnl["net_income"],
+        "closing_equity": closing["equity_total"],
+        "retained_earnings": closing["retained_earnings"],
+        "equity": closing["equity"],
+    }
+
+
+def as_csv(rows, fieldnames=None) -> str:
+    import csv
+    from io import StringIO
+
+    buf = StringIO()
+    if not fieldnames:
+        fieldnames = list(rows[0].keys()) if rows else []
+    writer = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
+    writer.writeheader()
+    for row in rows:
+        writer.writerow({k: row.get(k, "") for k in fieldnames})
+    return buf.getvalue()
+
+
+def as_xlsx(rows) -> bytes:
+    from io import BytesIO
+    from xml.sax.saxutils import escape
+    import zipfile
+
+    fields = list(rows[0].keys()) if rows else []
+    shared = list(fields)
+    body = ["<row r=\"1\">" + "".join(
+        f'<c r="{chr(65 + i)}1" t="s"><v>{i}</v></c>' for i in range(len(fields))
+    ) + "</row>"]
+    for r, row in enumerate(rows, 2):
+        cells = []
+        for i, key in enumerate(fields):
+            text = str(row.get(key, ""))
+            if text not in shared:
+                shared.append(text)
+            cells.append(f'<c r="{chr(65 + i)}{r}" t="s"><v>{shared.index(text)}</v></c>')
+        body.append(f'<row r="{r}">{"".join(cells)}</row>')
+    ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+    sst = f'<sst xmlns="{ns}">' + "".join(f"<si><t>{escape(s)}</t></si>" for s in shared) + "</sst>"
+    sheet = f'<worksheet xmlns="{ns}"><sheetData>{"".join(body)}</sheetData></worksheet>'
+    buf = BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("xl/sharedStrings.xml", sst)
+        zf.writestr("xl/worksheets/sheet1.xml", sheet)
+    return buf.getvalue()

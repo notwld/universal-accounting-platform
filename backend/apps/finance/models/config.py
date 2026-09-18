@@ -3,28 +3,62 @@ from django.db import models
 from apps.authentication.ids import new_uuid
 
 
-ISO_CURRENCIES = (
-    ("USD", 2, "US Dollar"),
-    ("EUR", 2, "Euro"),
-    ("GBP", 2, "Pound Sterling"),
-    ("JPY", 0, "Yen"),
-    ("KWD", 3, "Kuwaiti Dinar"),
-    ("BHD", 3, "Bahraini Dinar"),
-    ("CLP", 0, "Chilean Peso"),
-    ("AUD", 2, "Australian Dollar"),
-    ("CAD", 2, "Canadian Dollar"),
-    ("CHF", 2, "Swiss Franc"),
-    ("INR", 2, "Indian Rupee"),
-    ("SGD", 2, "Singapore Dollar"),
-    ("ZAR", 2, "Rand"),
-    ("SEK", 2, "Swedish Krona"),
-    ("NOK", 2, "Norwegian Krone"),
-    ("DKK", 2, "Danish Krone"),
-    ("CNY", 2, "Yuan Renminbi"),
-    ("HKD", 2, "Hong Kong Dollar"),
-    ("NZD", 2, "New Zealand Dollar"),
-    ("MXN", 2, "Mexican Peso"),
-)
+# ISO 4217 current codes. Exponent overrides: 0 minor units, 3, 4; default 2.
+_ISO_ZERO = "BIF CLP DJF GNF ISK JPY KMF KRW PYG RWF UGX VND VUV XAF XAG XAU XBA XBB XBC XBD XDR XOF XPD XPF XPT XSU XTS XUA XXX".split()
+_ISO_THREE = "BHD IQD JOD KWD LYD OMR TND".split()
+_ISO_FOUR = "CLF UYW".split()
+_ISO_NAMES = {
+    "AED": "UAE Dirham", "AFN": "Afghani", "ALL": "Lek", "AMD": "Armenian Dram", "ANG": "Netherlands Antillean Guilder",
+    "AOA": "Kwanza", "ARS": "Argentine Peso", "AUD": "Australian Dollar", "AWG": "Aruban Florin", "AZN": "Azerbaijan Manat",
+    "BAM": "Convertible Mark", "BBD": "Barbados Dollar", "BDT": "Taka", "BGN": "Bulgarian Lev", "BHD": "Bahraini Dinar",
+    "BIF": "Burundi Franc", "BMD": "Bermudian Dollar", "BND": "Brunei Dollar", "BOB": "Boliviano", "BOV": "Mvdol",
+    "BRL": "Brazilian Real", "BSD": "Bahamian Dollar", "BTN": "Ngultrum", "BWP": "Pula", "BYN": "Belarusian Ruble",
+    "BZD": "Belize Dollar", "CAD": "Canadian Dollar", "CDF": "Congolese Franc", "CHE": "WIR Euro", "CHF": "Swiss Franc",
+    "CHW": "WIR Franc", "CLF": "Unidad de Fomento", "CLP": "Chilean Peso", "CNY": "Yuan Renminbi", "COP": "Colombian Peso",
+    "COU": "Unidad de Valor Real", "CRC": "Costa Rican Colon", "CUC": "Peso Convertible", "CUP": "Cuban Peso",
+    "CVE": "Cabo Verde Escudo", "CZK": "Czech Koruna", "DJF": "Djibouti Franc", "DKK": "Danish Krone", "DOP": "Dominican Peso",
+    "DZD": "Algerian Dinar", "EGP": "Egyptian Pound", "ERN": "Nakfa", "ETB": "Ethiopian Birr", "EUR": "Euro",
+    "FJD": "Fiji Dollar", "FKP": "Falkland Islands Pound", "GBP": "Pound Sterling", "GEL": "Lari", "GHS": "Ghana Cedi",
+    "GIP": "Gibraltar Pound", "GMD": "Dalasi", "GNF": "Guinean Franc", "GTQ": "Quetzal", "GYD": "Guyana Dollar",
+    "HKD": "Hong Kong Dollar", "HNL": "Lempira", "HTG": "Gourde", "HUF": "Forint", "IDR": "Rupiah", "ILS": "New Israeli Sheqel",
+    "INR": "Indian Rupee", "IQD": "Iraqi Dinar", "IRR": "Iranian Rial", "ISK": "Iceland Krona", "JMD": "Jamaican Dollar",
+    "JOD": "Jordanian Dinar", "JPY": "Yen", "KES": "Kenyan Shilling", "KGS": "Som", "KHR": "Riel", "KMF": "Comorian Franc",
+    "KPW": "North Korean Won", "KRW": "Won", "KWD": "Kuwaiti Dinar", "KYD": "Cayman Islands Dollar", "KZT": "Tenge",
+    "LAK": "Lao Kip", "LBP": "Lebanese Pound", "LKR": "Sri Lanka Rupee", "LRD": "Liberian Dollar", "LSL": "Loti",
+    "LYD": "Libyan Dinar", "MAD": "Moroccan Dirham", "MDL": "Moldovan Leu", "MGA": "Malagasy Ariary", "MKD": "Denar",
+    "MMK": "Kyat", "MNT": "Tugrik", "MOP": "Pataca", "MRU": "Ouguiya", "MUR": "Mauritius Rupee", "MVR": "Rufiyaa",
+    "MWK": "Malawi Kwacha", "MXN": "Mexican Peso", "MXV": "Mexican Unidad de Inversion", "MYR": "Malaysian Ringgit",
+    "MZN": "Mozambique Metical", "NAD": "Namibia Dollar", "NGN": "Naira", "NIO": "Cordoba Oro", "NOK": "Norwegian Krone",
+    "NPR": "Nepalese Rupee", "NZD": "New Zealand Dollar", "OMR": "Rial Omani", "PAB": "Balboa", "PEN": "Sol",
+    "PGK": "Kina", "PHP": "Philippine Peso", "PKR": "Pakistan Rupee", "PLN": "Zloty", "PYG": "Guarani", "QAR": "Qatari Rial",
+    "RON": "Romanian Leu", "RSD": "Serbian Dinar", "RUB": "Russian Ruble", "RWF": "Rwanda Franc", "SAR": "Saudi Riyal",
+    "SBD": "Solomon Islands Dollar", "SCR": "Seychelles Rupee", "SDG": "Sudanese Pound", "SEK": "Swedish Krona",
+    "SGD": "Singapore Dollar", "SHP": "Saint Helena Pound", "SLE": "Leone", "SOS": "Somali Shilling", "SRD": "Surinam Dollar",
+    "SSP": "South Sudanese Pound", "STN": "Dobra", "SVC": "El Salvador Colon", "SYP": "Syrian Pound", "SZL": "Lilangeni",
+    "THB": "Baht", "TJS": "Somoni", "TMT": "Turkmenistan New Manat", "TND": "Tunisian Dinar", "TOP": "Pa’anga",
+    "TRY": "Turkish Lira", "TTD": "Trinidad and Tobago Dollar", "TWD": "New Taiwan Dollar", "TZS": "Tanzanian Shilling",
+    "UAH": "Hryvnia", "UGX": "Uganda Shilling", "USD": "US Dollar", "USN": "US Dollar (Next day)", "UYI": "Uruguay Peso en Unidades Indexadas",
+    "UYU": "Peso Uruguayo", "UYW": "Unidad Previsional", "UZS": "Uzbekistan Sum", "VED": "Bolivar Soberano",
+    "VES": "Bolivar Soberano", "VND": "Dong", "VUV": "Vatu", "WST": "Tala", "XAF": "CFA Franc BEAC", "XAG": "Silver",
+    "XAU": "Gold", "XBA": "Bond Markets Unit European Composite", "XBB": "Bond Markets Unit European Monetary",
+    "XBC": "Bond Markets Unit European Unit of Account 9", "XBD": "Bond Markets Unit European Unit of Account 17",
+    "XCD": "East Caribbean Dollar", "XDR": "SDR", "XOF": "CFA Franc BCEAO", "XPD": "Palladium", "XPF": "CFP Franc",
+    "XPT": "Platinum", "XSU": "Sucre", "XTS": "Codes specifically reserved for testing", "XUA": "ADB Unit of Account",
+    "XXX": "No currency", "YER": "Yemeni Rial", "ZAR": "Rand", "ZMW": "Zambian Kwacha", "ZWG": "Zimbabwe Gold",
+}
+
+
+def _iso_exponent(code: str) -> int:
+    if code in _ISO_ZERO:
+        return 0
+    if code in _ISO_THREE:
+        return 3
+    if code in _ISO_FOUR:
+        return 4
+    return 2
+
+
+ISO_CURRENCIES = tuple((code, _iso_exponent(code), name) for code, name in sorted(_ISO_NAMES.items()))
 
 
 class Currency(models.Model):
@@ -72,6 +106,9 @@ class FinanceSettings(models.Model):
         "finance.Account", null=True, blank=True, on_delete=models.PROTECT, related_name="+"
     )
     cogs_account = models.ForeignKey(
+        "finance.Account", null=True, blank=True, on_delete=models.PROTECT, related_name="+"
+    )
+    retained_earnings_account = models.ForeignKey(
         "finance.Account", null=True, blank=True, on_delete=models.PROTECT, related_name="+"
     )
     require_document_approval = models.BooleanField(default=False)

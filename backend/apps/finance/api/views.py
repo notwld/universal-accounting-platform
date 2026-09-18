@@ -132,6 +132,15 @@ class SettingsView(APIView):
     @extend_schema(tags=["Finance"], parameters=[ORG_HEADER])
     def put(self, request):
         user, org = _org_action(request, "finance.settings.configure")
+        existing = FinanceSettings.objects.filter(organization=org).first()
+        new_ccy = request.data.get("base_currency")
+        if (
+            existing
+            and new_ccy
+            and new_ccy != existing.base_currency_id
+            and JournalEntry.objects.filter(organization=org, status=JournalEntry.Status.POSTED).exists()
+        ):
+            require_step_up(request)
         settings = upsert_settings(org=org, payload=request.data)
         FinanceAuditEvent.objects.create(
             organization=org,
@@ -159,6 +168,7 @@ def _settings_payload(settings: FinanceSettings) -> dict:
         "vendor_advance_account_id": settings.vendor_advance_account_id,
         "inventory_account_id": settings.inventory_account_id,
         "cogs_account_id": settings.cogs_account_id,
+        "retained_earnings_account_id": settings.retained_earnings_account_id,
         "require_document_approval": settings.require_document_approval,
         "allow_self_approve": settings.allow_self_approve,
         "approval_threshold": str(settings.approval_threshold),
@@ -455,18 +465,22 @@ class PeriodLockView(APIView):
     @extend_schema(tags=["Finance"], parameters=[ORG_HEADER])
     def post(self, request, period_id: str):
         user, org = _org_action(request, "finance.period.lock")
-        period = FiscalPeriodLock.objects.filter(id=period_id, organization=org).first()
-        if not period:
-            raise AuthAPIError("cross_organization", "Period not found")
-        from django.utils import timezone
+        from apps.finance.services.periods import lock_period
 
-        period.status = FiscalPeriodLock.Status.LOCKED
-        period.locked_by = user.id
-        period.locked_at = timezone.now()
-        period.save()
+        year_end = bool(request.data.get("year_end")) if request.body else False
+        period = lock_period(
+            user_id=user.id,
+            org=org,
+            period_id=period_id,
+            year_end=year_end,
+            idempotency_key=request.headers.get("Idempotency-Key") or "",
+        )
+        from apps.finance.models import FinanceAuditEvent
+
         FinanceAuditEvent.objects.create(
             organization=org, actor_user_id=user.id, action="period.lock",
             object_type="period", object_id=period.id,
+            payload={"year_end": year_end},
         )
         return envelope_success(request, _period_payload(period))
 
@@ -525,6 +539,9 @@ class TrialBalanceView(APIView):
             org=org, start=start, end=end, exponent=settings.base_currency.exponent,
             tag_id=request.query_params.get("tag_id"),
         )
+        table = _table_response(request, rows, "trial-balance")
+        if table is not None:
+            return table
         return envelope_success(request, {"items": rows})
 
 
@@ -609,4 +626,91 @@ class CashFlowView(APIView):
         return envelope_success(
             request,
             report_selectors.cash_flow(org=org, start=start, end=end, exponent=settings.base_currency.exponent),
+        )
+
+
+class TaxSummaryView(APIView):
+    permission_classes = [IsApplicationUser]
+
+    @extend_schema(tags=["Finance"], parameters=[ORG_HEADER])
+    def get(self, request):
+        _, org = _org_action(request, "finance.report.view")
+        settings = FinanceSettings.objects.select_related("base_currency").filter(organization=org).first()
+        if not settings:
+            raise AuthAPIError("validation_error", "Finance setup is incomplete")
+        start = request.query_params.get("from")
+        end = request.query_params.get("to")
+        if not start or not end:
+            raise AuthAPIError("validation_error", "from and to are required")
+        return envelope_success(
+            request,
+            report_selectors.tax_summary(org=org, start=start, end=end, exponent=settings.base_currency.exponent),
+        )
+
+
+def _table_response(request, rows, filename):
+    fmt = (request.query_params.get("export") or "").lower()
+    if fmt not in ("csv", "xlsx"):
+        return None
+    from django.http import HttpResponse
+
+    if fmt == "csv":
+        body = report_selectors.as_csv(rows)
+        resp = HttpResponse(body, content_type="text/csv")
+        resp["Content-Disposition"] = f'attachment; filename="{filename}.csv"'
+        return resp
+    body = report_selectors.as_xlsx(rows)
+    resp = HttpResponse(body, content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    resp["Content-Disposition"] = f'attachment; filename="{filename}.xlsx"'
+    return resp
+
+
+class EquityMovementView(APIView):
+    permission_classes = [IsApplicationUser]
+
+    @extend_schema(tags=["Finance"], parameters=[ORG_HEADER])
+    def get(self, request):
+        _, org = _org_action(request, "finance.report.view")
+        settings = FinanceSettings.objects.select_related("base_currency").filter(organization=org).first()
+        if not settings:
+            raise AuthAPIError("validation_error", "Finance setup is incomplete")
+        start = request.query_params.get("from")
+        end = request.query_params.get("to")
+        if not start or not end:
+            raise AuthAPIError("validation_error", "from and to are required")
+        return envelope_success(
+            request,
+            report_selectors.equity_movement(
+                org=org, start=start, end=end, exponent=settings.base_currency.exponent
+            ),
+        )
+
+
+class BooksExportView(APIView):
+    permission_classes = [IsApplicationUser]
+    throttle_classes = []
+
+    @extend_schema(tags=["Finance"], parameters=[ORG_HEADER])
+    def get(self, request):
+        from rest_framework.throttling import UserRateThrottle
+
+        class ExportThrottle(UserRateThrottle):
+            rate = "30/min"
+
+        self.throttle_classes = [ExportThrottle]
+        self.check_throttles(request)
+        user, org = _org_action(request, "finance.report.view")
+        require_step_up(request)
+        from apps.finance.models import Contact, Item, TaxRate
+
+        settings = FinanceSettings.objects.filter(organization=org).first()
+        return envelope_success(
+            request,
+            {
+                "settings": None if not settings else _settings_payload(settings),
+                "accounts": [_account_payload(a) for a in Account.objects.filter(organization=org).order_by("code")],
+                "contacts": [{"id": c.id, "name": c.name} for c in Contact.objects.filter(organization=org)],
+                "items": [{"id": i.id, "sku": i.sku, "name": i.name} for i in Item.objects.filter(organization=org)],
+                "tax_rates": [{"id": t.id, "name": t.name, "rate": str(t.rate)} for t in TaxRate.objects.filter(organization=org)],
+            },
         )

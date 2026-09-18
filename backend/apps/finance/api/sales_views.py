@@ -7,9 +7,8 @@ from apps.authentication.exceptions import AuthAPIError, envelope_success
 from apps.authentication.permissions.authenticated import IsApplicationUser
 from apps.finance.api.views import ORG_HEADER, _org_action
 from apps.finance.models import (
+    Account,
     Contact,
-    CreditNote,
-    CreditNoteLine,
     CustomerPayment,
     ExchangeRate,
     Invoice,
@@ -20,12 +19,13 @@ from apps.finance.models import (
     TaxRate,
 )
 from apps.finance.selectors.aging import ar_aging
+from apps.finance.services.resolve import currency_get, org_get, org_get_optional
 from apps.finance.services.sales import (
     convert_quote,
+    create_and_post_credit,
+    create_and_post_payment,
     invoice_preview,
-    post_credit,
     post_invoice,
-    post_payment,
     refund_payment,
     set_invoice_lines,
 )
@@ -70,9 +70,9 @@ class ItemListCreateView(APIView):
             name=request.data.get("name"),
             kind=request.data.get("kind") or (Item.Kind.GOOD if request.data.get("tracked") else Item.Kind.SERVICE),
             unit_price=request.data.get("unit_price") or 0,
-            income_account_id=request.data.get("income_account_id"),
-            expense_account_id=request.data.get("expense_account_id"),
-            default_tax_id=request.data.get("tax_rate_id"),
+            income_account=org_get(Account, org, request.data.get("income_account_id")),
+            expense_account=org_get_optional(Account, org, request.data.get("expense_account_id")),
+            default_tax=org_get_optional(TaxRate, org, request.data.get("tax_rate_id")),
             tracked=bool(request.data.get("tracked")),
         )
         return envelope_success(request, _item(i), http_status=201)
@@ -94,7 +94,7 @@ class TaxRateListCreateView(APIView):
             name=request.data.get("name"),
             rate=request.data.get("rate"),
             method=request.data.get("method") or TaxRate.Method.EXCLUSIVE,
-            payable_account_id=request.data.get("payable_account_id"),
+            payable_account=org_get(Account, org, request.data.get("payable_account_id")),
             valid_from=request.data.get("valid_from") or date.today().isoformat(),
         )
         return envelope_success(request, _tax(t), http_status=201)
@@ -134,10 +134,15 @@ class ExchangeRateListCreateView(APIView):
     @extend_schema(tags=["Finance"], parameters=[ORG_HEADER])
     def post(self, request):
         _, org = _org_action(request, "finance.settings.configure")
+        from decimal import Decimal
+
+        rate = Decimal(str(request.data.get("rate") or 0))
+        if rate <= 0:
+            raise AuthAPIError("validation_error", "Exchange rate must be positive")
         r = ExchangeRate.objects.create(
             organization=org,
-            currency_id=request.data.get("currency"),
-            rate=request.data.get("rate"),
+            currency=currency_get(request.data.get("currency")),
+            rate=rate,
             as_of=request.data.get("as_of"),
         )
         return envelope_success(
@@ -158,15 +163,15 @@ class QuoteListCreateView(APIView):
         _, org = _org_action(request, "finance.invoice.create")
         q = Quote.objects.create(
             organization=org,
-            contact_id=request.data.get("contact_id"),
+            contact=org_get(Contact, org, request.data.get("contact_id")),
             entry_date=request.data.get("entry_date"),
-            currency_id=request.data.get("currency"),
+            currency=currency_get(request.data.get("currency")),
         )
         for line in request.data.get("lines") or []:
             QuoteLine.objects.create(
-                quote=q, organization=org, item_id=line.get("item_id"),
+                quote=q, organization=org, item=org_get(Item, org, line.get("item_id")),
                 description=line.get("description") or "", quantity=line.get("quantity") or 1,
-                unit_price=line.get("unit_price"), tax_rate_id=line.get("tax_rate_id"),
+                unit_price=line.get("unit_price"), tax_rate=org_get_optional(TaxRate, org, line.get("tax_rate_id")),
             )
         return envelope_success(request, _quote(q), http_status=201)
 
@@ -205,10 +210,10 @@ class InvoiceListCreateView(APIView):
         due = request.data.get("due_date") or request.data.get("entry_date")
         inv = Invoice.objects.create(
             organization=org,
-            contact_id=request.data.get("contact_id"),
+            contact=org_get(Contact, org, request.data.get("contact_id")),
             entry_date=request.data.get("entry_date"),
             due_date=due,
-            currency_id=request.data.get("currency"),
+            currency=currency_get(request.data.get("currency")),
             fx_rate=request.data.get("fx_rate") or 1,
             created_by=user.id,
         )
@@ -283,28 +288,8 @@ class CreditNoteListCreateView(APIView):
     @extend_schema(tags=["Finance"], parameters=[ORG_HEADER])
     def post(self, request):
         user, org = _org_action(request, "finance.document.post")
-        cn = CreditNote.objects.create(
-            organization=org,
-            contact_id=request.data.get("contact_id"),
-            invoice_id=request.data.get("invoice_id"),
-            entry_date=request.data.get("entry_date"),
-            currency_id=request.data.get("currency"),
-            fx_rate=request.data.get("fx_rate") or 1,
-            total=request.data.get("total") or 0,
-            base_total=request.data.get("base_total") or 0,
-        )
-        for line in request.data.get("lines") or []:
-            CreditNoteLine.objects.create(
-                credit_note=cn, organization=org,
-                description=line.get("description") or "",
-                income_account_id=line.get("income_account_id"),
-                net=line.get("net") or 0, tax_amount=line.get("tax_amount") or 0,
-                total=line.get("total") or 0, base_net=line.get("base_net") or 0,
-                base_tax=line.get("base_tax") or 0, base_total=line.get("base_total") or 0,
-                tax_payable_account_id=line.get("tax_payable_account_id"),
-            )
-        posted = post_credit(
-            user_id=user.id, org=org, credit=cn,
+        posted = create_and_post_credit(
+            user_id=user.id, org=org, payload=request.data,
             idempotency_key=request.headers.get("Idempotency-Key"),
         )
         return envelope_success(request, {"id": posted.id, "status": posted.status, "number": posted.number}, http_status=201)
@@ -316,18 +301,8 @@ class PaymentListCreateView(APIView):
     @extend_schema(tags=["Finance"], parameters=[ORG_HEADER])
     def post(self, request):
         user, org = _org_action(request, "finance.payment.record")
-        pay = CustomerPayment.objects.create(
-            organization=org,
-            contact_id=request.data.get("contact_id"),
-            bank_account_id=request.data.get("bank_account_id"),
-            entry_date=request.data.get("entry_date"),
-            currency_id=request.data.get("currency"),
-            fx_rate=request.data.get("fx_rate") or 1,
-            amount=request.data.get("amount"),
-        )
-        posted = post_payment(
-            user_id=user.id, org=org, payment=pay,
-            allocations=request.data.get("allocations") or [],
+        posted = create_and_post_payment(
+            user_id=user.id, org=org, payload=request.data,
             idempotency_key=request.headers.get("Idempotency-Key"),
         )
         return envelope_success(request, {"id": posted.id, "status": posted.status, "amount": str(posted.amount)}, http_status=201)
@@ -339,9 +314,7 @@ class RefundCreateView(APIView):
     @extend_schema(tags=["Finance"], parameters=[ORG_HEADER])
     def post(self, request):
         user, org = _org_action(request, "finance.payment.record")
-        pay = CustomerPayment.objects.filter(id=request.data.get("payment_id"), organization=org).first()
-        if not pay:
-            raise AuthAPIError("cross_organization", "Payment not found")
+        pay = org_get(CustomerPayment, org, request.data.get("payment_id"), "Payment not found")
         ref = refund_payment(
             user_id=user.id, org=org, payment=pay, amount=request.data.get("amount"),
             bank_account_id=request.data.get("bank_account_id"),
@@ -360,7 +333,7 @@ class ARAgingView(APIView):
         as_of = request.query_params.get("as_of")
         if not as_of:
             raise AuthAPIError("validation_error", "as_of is required")
-        return envelope_success(request, {"items": ar_aging(org=org, as_of=as_of)})
+        return envelope_success(request, ar_aging(org=org, as_of=as_of))
 
 
 def _contact(c):

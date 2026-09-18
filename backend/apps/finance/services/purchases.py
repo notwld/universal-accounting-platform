@@ -4,6 +4,7 @@ from django.db.models import Sum
 
 from apps.authentication.exceptions import AuthAPIError
 from apps.finance.models import (
+    Account,
     Bill,
     BillAllocation,
     BillLine,
@@ -17,15 +18,18 @@ from apps.finance.models import (
     PurchaseOrder,
     TaxRate,
     VendorCredit,
+    VendorCreditLine,
     VendorPayment,
     VendorRefund,
 )
 from apps.finance.services.approvals import invalidate_approval, require_approved_for_post
 from apps.finance.services.context import finance_tx
-from apps.finance.services.posting import post_generated
+from apps.finance.services.money import quantize_quantity
+from apps.finance.services.posting import begin_command, finish_command, post_generated, replay_resource
+from apps.finance.services.resolve import currency_get, org_get, org_get_optional
 from apps.finance.services.sales import resolve_rate, to_base
 from apps.finance.services.sequence import next_document_number
-from apps.finance.services.stock import receive_line, reverse_moves
+from apps.finance.services.stock import receive_line, return_qty
 from apps.finance.services.tax import line_tax
 
 
@@ -188,35 +192,86 @@ def post_bill(*, user_id, org, bill, idempotency_key, skip_approval=False):
         return Bill.objects.get(pk=inv.pk)
 
 
+def _vendor_credit_stock(*, org, credit: VendorCredit):
+    from apps.finance.models import StockMove
+
+    removed = Decimal("0")
+    for line in credit.lines.select_related("item", "bill_line", "bill_line__item"):
+        if line.price_only:
+            continue
+        qty = quantize_quantity(line.quantity or 0)
+        if qty <= 0:
+            continue
+        item = line.item
+        if line.bill_line_id:
+            src = BillLine.objects.select_for_update().filter(pk=line.bill_line_id, organization=org).first()
+            if not src:
+                raise AuthAPIError("cross_organization", "Bill line not found")
+            used = (
+                VendorCreditLine.objects.filter(
+                    bill_line=src, credit__status=VendorCredit.Status.POSTED, organization=org
+                )
+                .exclude(pk=line.pk)
+                .aggregate(s=Sum("quantity"))["s"]
+                or Decimal("0")
+            )
+            if used + qty > src.quantity:
+                raise AuthAPIError("over_allocation", "Credit quantity exceeds source line")
+            item = src.item
+        if not item or not item.tracked:
+            continue
+        move = StockMove.objects.filter(
+            organization=org,
+            source_type="bill",
+            source_id=credit.bill_id or "",
+            item=item,
+            kind=StockMove.Kind.RECEIVE,
+        ).first()
+        removed += return_qty(
+            org=org,
+            item=item,
+            qty=qty,
+            unit_cost=move.unit_cost if move else 0,
+            source_type="vendor_credit",
+            source_id=credit.id,
+            entry_date=credit.entry_date,
+            inbound=False,
+        )
+    return removed
+
+
 def post_vendor_credit(*, user_id, org, credit: VendorCredit, idempotency_key):
     settings = _settings(org)
     require_ap(settings)
     with finance_tx(user_id=user_id, organization_id=org.id):
-        cn = VendorCredit.objects.select_for_update().get(pk=credit.pk)
+        cn = VendorCredit.objects.select_for_update().filter(pk=credit.pk, organization=org).first()
+        if not cn:
+            raise AuthAPIError("cross_organization", "Vendor credit not found")
+        if cn.status == VendorCredit.Status.POSTED:
+            return cn
         gl = [{"account_id": settings.ap_account_id, "debit": str(cn.base_total), "credit": "0", "description": "AP"}]
         for line in cn.lines.all():
             gl.append({"account_id": line.expense_account_id, "debit": "0", "credit": str(line.base_net), "description": line.description})
             if line.base_tax and line.tax_payable_account_id:
                 gl.append({"account_id": line.tax_payable_account_id, "debit": "0", "credit": str(line.base_tax), "description": "tax"})
+        removed = _vendor_credit_stock(org=org, credit=cn)
+        if removed:
+            if not settings.inventory_account_id or not settings.cogs_account_id:
+                raise AuthAPIError("validation_error", "Inventory and COGS accounts are required")
+            gl.append({"account_id": settings.cogs_account_id, "debit": str(removed), "credit": "0", "description": "COGS"})
+            gl.append({"account_id": settings.inventory_account_id, "debit": "0", "credit": str(removed), "description": "inventory"})
         posted = post_generated(
             user_id=user_id, org=org, entry_date=cn.entry_date, source_type=JournalEntry.Source.VENDOR_CREDIT,
-            memo="vendor credit", gl_lines=gl, idempotency_key=idempotency_key, body={"vendor_credit_id": cn.id},
+            memo="vendor credit", gl_lines=gl, idempotency_key=idempotency_key,             body={"vendor_credit_id": cn.id},
         )
-        if cn.bill_id:
-            reverse_moves(
-                org=org,
-                source_type="bill",
-                source_id=cn.bill_id,
-                entry_date=cn.entry_date,
-                new_source_type="vendor_credit",
-                new_source_id=cn.id,
-            )
         cn.status = VendorCredit.Status.POSTED
         cn.number = next_document_number(org, "vendor_credit", "VC-")
         cn.journal = posted
         cn.save()
         if cn.bill_id:
-            bill = Bill.objects.select_for_update().get(pk=cn.bill_id)
+            bill = Bill.objects.select_for_update().filter(pk=cn.bill_id, organization=org).first()
+            if not bill:
+                raise AuthAPIError("cross_organization", "Bill not found")
             remain = outstanding(bill)
             apply = min(remain, cn.total)
             if apply < cn.total:
@@ -226,6 +281,96 @@ def post_vendor_credit(*, user_id, org, credit: VendorCredit, idempotency_key):
                 base_amount=cn.base_total, entry_date=cn.entry_date,
             )
         return cn
+
+
+def create_and_post_vendor_credit(*, user_id, org, payload, idempotency_key):
+    from apps.finance.models import Contact
+
+    body = {
+        "contact_id": payload.get("contact_id"),
+        "bill_id": payload.get("bill_id"),
+        "entry_date": payload.get("entry_date"),
+        "currency": payload.get("currency"),
+        "total": str(payload.get("total") or 0),
+        "lines": payload.get("lines") or [],
+    }
+    with finance_tx(user_id=user_id, organization_id=org.id):
+        rec, replay = begin_command(org, "vendor_credit.command", idempotency_key, body)
+        if replay:
+            return replay_resource(rec, VendorCredit)
+        contact = org_get(Contact, org, payload.get("contact_id"))
+        bill = org_get_optional(Bill, org, payload.get("bill_id"))
+        cn = VendorCredit.objects.create(
+            organization=org,
+            contact=contact,
+            bill=bill,
+            entry_date=payload.get("entry_date"),
+            currency=currency_get(payload.get("currency")),
+            fx_rate=payload.get("fx_rate") or 1,
+            total=payload.get("total") or 0,
+            base_total=payload.get("base_total") or 0,
+        )
+        for line in payload.get("lines") or []:
+            src = org_get_optional(BillLine, org, line.get("bill_line_id"))
+            if src and bill and src.bill_id != bill.id:
+                raise AuthAPIError("cross_organization", "Bill line not found")
+            item = org_get(Item, org, line.get("item_id")) if line.get("item_id") else (src.item if src else None)
+            expense = org_get(Account, org, line.get("expense_account_id") or (item.expense_account_id if item else None))
+            VendorCreditLine.objects.create(
+                credit=cn,
+                organization=org,
+                bill_line=src,
+                item=item,
+                quantity=line.get("quantity") or 0,
+                price_only=bool(line.get("price_only")),
+                description=line.get("description") or "",
+                expense_account=expense,
+                net=line.get("net") or 0,
+                tax_amount=line.get("tax_amount") or 0,
+                total=line.get("total") or 0,
+                base_net=line.get("base_net") or 0,
+                base_tax=line.get("base_tax") or 0,
+                base_total=line.get("base_total") or 0,
+                tax_payable_account=org_get_optional(Account, org, line.get("tax_payable_account_id")),
+            )
+        posted = post_vendor_credit(user_id=user_id, org=org, credit=cn, idempotency_key=f"{idempotency_key}:post")
+        finish_command(rec, resource_type="vendor_credit", resource_id=posted.id, journal=posted.journal)
+        return posted
+
+
+def create_and_post_vendor_payment(*, user_id, org, payload, idempotency_key):
+    from apps.finance.models import Contact
+
+    body = {
+        "contact_id": payload.get("contact_id"),
+        "bank_account_id": payload.get("bank_account_id"),
+        "entry_date": payload.get("entry_date"),
+        "currency": payload.get("currency"),
+        "amount": str(payload.get("amount") or 0),
+        "allocations": payload.get("allocations") or [],
+    }
+    with finance_tx(user_id=user_id, organization_id=org.id):
+        rec, replay = begin_command(org, "vendor_payment.command", idempotency_key, body)
+        if replay:
+            return replay_resource(rec, VendorPayment)
+        pay = VendorPayment.objects.create(
+            organization=org,
+            contact=org_get(Contact, org, payload.get("contact_id")),
+            bank_account=org_get(Account, org, payload.get("bank_account_id")),
+            entry_date=payload.get("entry_date"),
+            currency=currency_get(payload.get("currency")),
+            fx_rate=payload.get("fx_rate") or 1,
+            amount=payload.get("amount"),
+        )
+        posted = post_vendor_payment(
+            user_id=user_id,
+            org=org,
+            payment=pay,
+            allocations=payload.get("allocations") or [],
+            idempotency_key=f"{idempotency_key}:post",
+        )
+        finish_command(rec, resource_type="vendor_payment", resource_id=posted.id, journal=posted.journal)
+        return posted
 
 
 def post_vendor_payment(*, user_id, org, payment: VendorPayment, allocations: list, idempotency_key):
@@ -298,35 +443,45 @@ def refund_vendor_payment(*, user_id, org, payment: VendorPayment, amount, bank_
     if not settings.vendor_advance_account_id:
         raise AuthAPIError("validation_error", "Vendor advance account is not configured")
     amt = Decimal(str(amount))
-    allocated = BillAllocation.objects.filter(payment=payment).aggregate(s=Sum("amount"))["s"] or Decimal("0")
-    available = payment.amount - allocated
-    refunded = VendorRefund.objects.filter(payment=payment).aggregate(s=Sum("amount"))["s"] or Decimal("0")
-    available -= refunded
-    if amt > available:
-        raise AuthAPIError("over_allocation", "Refund exceeds remaining advance")
-    exponent = settings.base_currency.exponent
-    base = to_base(amt, payment.fx_rate, exponent)
+    if amt <= 0:
+        raise AuthAPIError("validation_error", "Refund must be positive")
     with finance_tx(user_id=user_id, organization_id=org.id):
+        pay = VendorPayment.objects.select_for_update().filter(pk=payment.pk, organization=org).first()
+        if not pay:
+            raise AuthAPIError("cross_organization", "Payment not found")
+        bank = org_get(Account, org, bank_account_id)
+        allocated = BillAllocation.objects.filter(payment=pay).aggregate(s=Sum("amount"))["s"] or Decimal("0")
+        refunded = VendorRefund.objects.filter(payment=pay).aggregate(s=Sum("amount"))["s"] or Decimal("0")
+        available = pay.amount - allocated - refunded
+        if amt > available:
+            raise AuthAPIError("over_allocation", "Refund exceeds remaining advance")
+        exponent = settings.base_currency.exponent
+        base = to_base(amt, pay.fx_rate, exponent)
         posted = post_generated(
             user_id=user_id, org=org, entry_date=entry_date, source_type=JournalEntry.Source.VENDOR_REFUND,
             memo="vendor refund",
             gl_lines=[
-                {"account_id": bank_account_id, "debit": str(base), "credit": "0", "description": "bank"},
+                {"account_id": bank.id, "debit": str(base), "credit": "0", "description": "bank"},
                 {"account_id": settings.vendor_advance_account_id, "debit": "0", "credit": str(base), "description": "advance"},
             ],
             idempotency_key=idempotency_key,
-            body={"payment_id": payment.id, "amount": str(amt)},
+            body={"payment_id": pay.id, "amount": str(amt)},
         )
         return VendorRefund.objects.create(
-            organization=org, payment=payment, amount=amt, entry_date=entry_date,
-            bank_account_id=bank_account_id, journal=posted,
+            organization=org, payment=pay, amount=amt, entry_date=entry_date,
+            bank_account=bank, journal=posted,
         )
 
 
 def post_expense(*, user_id, org, contact_id, bank_account_id, entry_date, currency_id, fx_rate, lines, idempotency_key):
+    from apps.finance.models import Contact
+
+    contact = org_get(Contact, org, contact_id)
+    bank = org_get(Account, org, bank_account_id)
+    currency = currency_get(currency_id)
     settings = _settings(org)
     exponent = settings.base_currency.exponent
-    fx = resolve_rate(org, currency_id, entry_date, settings.base_currency_id, fx_rate)
+    fx = resolve_rate(org, currency.code, entry_date, settings.base_currency_id, fx_rate)
     gl = []
     total = Decimal("0")
     base_total = Decimal("0")
@@ -340,30 +495,32 @@ def post_expense(*, user_id, org, contact_id, bank_account_id, entry_date, curre
         base_line = to_base(line_total, fx, exponent)
         total += line_total
         base_total += base_line
-        prepared.append((raw, net, tax_amt, line_total, base_net, base_tax, base_line))
-        gl.append({"account_id": raw.get("expense_account_id"), "debit": str(base_net), "credit": "0", "description": raw.get("description") or "expense"})
-        if base_tax and raw.get("tax_payable_account_id"):
-            gl.append({"account_id": raw.get("tax_payable_account_id"), "debit": str(base_tax), "credit": "0", "description": "tax"})
-    gl.append({"account_id": bank_account_id, "debit": "0", "credit": str(base_total), "description": "bank"})
+        expense = org_get(Account, org, raw.get("expense_account_id"))
+        tax_acct = org_get_optional(Account, org, raw.get("tax_payable_account_id"))
+        prepared.append((raw, net, tax_amt, line_total, base_net, base_tax, base_line, expense.id, tax_acct.id if tax_acct else None))
+        gl.append({"account_id": expense.id, "debit": str(base_net), "credit": "0", "description": raw.get("description") or "expense"})
+        if base_tax and tax_acct:
+            gl.append({"account_id": tax_acct.id, "debit": str(base_tax), "credit": "0", "description": "tax"})
+    gl.append({"account_id": bank.id, "debit": "0", "credit": str(base_total), "description": "bank"})
     with finance_tx(user_id=user_id, organization_id=org.id):
         posted = post_generated(
             user_id=user_id, org=org, entry_date=entry_date, source_type=JournalEntry.Source.EXPENSE,
             memo="expense", gl_lines=gl, idempotency_key=idempotency_key,
-            body={"contact_id": contact_id, "amount": str(total), "lines": lines},
+            body={"contact_id": contact.id, "amount": str(total), "lines": lines},
         )
         exp = PaidExpense.objects.create(
-            organization=org, contact_id=contact_id, bank_account_id=bank_account_id,
+            organization=org, contact=contact, bank_account=bank,
             number=next_document_number(org, "expense", "EXP-"),
-            entry_date=entry_date, currency_id=currency_id, fx_rate=fx,
+            entry_date=entry_date, currency=currency, fx_rate=fx,
             total=total, base_total=base_total, journal=posted,
         )
-        for raw, net, tax_amt, line_total, base_net, base_tax, base_line in prepared:
+        for raw, net, tax_amt, line_total, base_net, base_tax, base_line, expense_id, tax_id in prepared:
             PaidExpenseLine.objects.create(
                 expense=exp, organization=org, description=raw.get("description") or "",
-                expense_account_id=raw.get("expense_account_id"),
+                expense_account_id=expense_id,
                 net=net, tax_amount=tax_amt, total=line_total,
                 base_net=base_net, base_tax=base_tax, base_total=base_line,
-                tax_payable_account_id=raw.get("tax_payable_account_id"),
+                tax_payable_account_id=tax_id,
             )
         return exp
 

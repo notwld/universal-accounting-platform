@@ -121,3 +121,29 @@ def test_cash_flow_tags_comparative(api, rsa_keys, auth_user):
         assert bs.status_code == 200, bs.content
         assert bs.json()["data"]["asset_total"] == bs.json()["data"]["liability_and_equity_total"]
         assert Decimal(bs.json()["data"]["prior"]["asset_total"]) == Decimal("0.00")
+
+        tb = api.get(
+            "/api/v1/finance/reports/trial-balance?from=2026-02-01&to=2026-12-31", **_h(token, oid)
+        ).json()["data"]["items"]
+        cash_tb = next(x for x in tb if x["code"] == "1000")
+        assert Decimal(cash_tb["opening_debit"]) == Decimal("1000.00")
+        assert Decimal(cash_tb["debit"]) - Decimal(cash_tb["credit"]) + Decimal(cash_tb["opening_debit"]) - Decimal(cash_tb["opening_credit"]) == Decimal(cash_tb["closing_debit"]) - Decimal(cash_tb["closing_credit"])
+        tax = api.get(
+            "/api/v1/finance/reports/tax-summary?from=2026-01-01&to=2026-12-31", **_h(token, oid)
+        )
+        assert tax.status_code == 200, tax.content
+        assert "total" in tax.json()["data"]
+        assert "line_count" in cash_tb
+        csv_tb = api.get(
+            "/api/v1/finance/reports/trial-balance?from=2026-02-01&to=2026-12-31&export=csv", **_h(token, oid)
+        )
+        assert csv_tb.status_code == 200
+        assert b"opening_debit" in csv_tb.content
+        eq = api.get(
+            "/api/v1/finance/reports/equity-movement?from=2026-01-01&to=2026-12-31", **_h(token, oid)
+        )
+        assert eq.status_code == 200, eq.content
+        assert "closing_equity" in eq.json()["data"]
+        dumped = api.get("/api/v1/finance/export", **_h(token, oid))
+        assert dumped.status_code == 200, dumped.content
+        assert dumped.json()["data"]["settings"]["base_currency"] == "USD"

@@ -34,6 +34,8 @@ class AccessLogMiddleware(MiddlewareMixin):
             )
             if path.startswith("/api/v1/auth/"):
                 metrics.incr("auth_http_requests_total", path=path, status=response.status_code)
+            elif path.startswith("/api/v1/finance/"):
+                metrics.incr("finance_http_requests_total", status=response.status_code)
         response["X-Request-ID"] = getattr(request, "request_id", response.get("X-Request-ID", ""))
         if path.startswith("/api/v1/auth/"):
             response.setdefault("Cache-Control", "no-store")

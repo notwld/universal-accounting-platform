@@ -124,6 +124,16 @@ def test_po_payment_run_attachment_statement(api, rsa_keys, auth_user):
             format="multipart", **_h(token, org["id"]),
         )
         assert bad.status_code == 422
+        spoof = api.post(
+            "/api/v1/finance/attachments",
+            {
+                "object_type": "bill",
+                "object_id": bill_id,
+                "file": SimpleUploadedFile("x.pdf", b"MZ", content_type="application/pdf"),
+            },
+            format="multipart", **_h(token, org["id"]),
+        )
+        assert spoof.status_code == 422
 
         other, *_ = create_books(api, token, name="OtherCo", currency="USD", month=1, country="US")
         blocked = api.get(

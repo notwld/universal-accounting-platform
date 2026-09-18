@@ -1,4 +1,5 @@
 from django.db import models
+from django.db.models import Q
 
 from apps.authentication.ids import new_uuid
 
@@ -199,6 +200,12 @@ class CreditNoteLine(models.Model):
     id = models.CharField(primary_key=True, max_length=36, default=new_uuid, editable=False)
     credit_note = models.ForeignKey(CreditNote, on_delete=models.CASCADE, related_name="lines")
     organization = models.ForeignKey("tenancy.Organization", on_delete=models.PROTECT)
+    invoice_line = models.ForeignKey(
+        InvoiceLine, null=True, blank=True, on_delete=models.PROTECT, related_name="credit_lines"
+    )
+    item = models.ForeignKey(Item, null=True, blank=True, on_delete=models.PROTECT)
+    quantity = models.DecimalField(max_digits=20, decimal_places=8, default=0)
+    price_only = models.BooleanField(default=False)
     description = models.CharField(max_length=255, blank=True, default="")
     income_account = models.ForeignKey("finance.Account", on_delete=models.PROTECT)
     net = models.DecimalField(max_digits=20, decimal_places=8, default=0)
@@ -251,6 +258,13 @@ class Allocation(models.Model):
 
     class Meta:
         db_table = "finance_allocation"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["payment", "invoice"],
+                condition=Q(payment__isnull=False),
+                name="uniq_finance_allocation_payment_invoice",
+            )
+        ]
 
 
 class CustomerRefund(models.Model):

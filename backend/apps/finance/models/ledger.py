@@ -24,6 +24,7 @@ class JournalEntry(models.Model):
         BANK = "bank"
         STOCK = "stock"
         ASSET = "asset"
+        CLOSE = "close"
 
     id = models.CharField(primary_key=True, max_length=36, default=new_uuid, editable=False)
     organization = models.ForeignKey(
@@ -105,6 +106,9 @@ class FinanceIdempotency(models.Model):
     key = models.CharField(max_length=128)
     request_hash = models.CharField(max_length=64)
     journal = models.ForeignKey(JournalEntry, null=True, blank=True, on_delete=models.SET_NULL)
+    resource_type = models.CharField(max_length=32, blank=True, default="")
+    resource_id = models.CharField(max_length=36, blank=True, default="")
+    status = models.CharField(max_length=24, default="in_progress")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

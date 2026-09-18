@@ -305,7 +305,7 @@ def test_fx_bill_and_settlement(api, rsa_keys, auth_user):
         missing = api.post(
             "/api/v1/finance/bills",
             {
-                "contact_id": contact["id"], "entry_date": "2026-05-01", "currency": "EUR",
+                "contact_id": contact["id"], "entry_date": "2026-05-01", "currency": "GBP",
                 "lines": [{"item_id": item_fx["id"], "quantity": "1", "unit_price": "100"}],
             },
             format="json", **_h(token, org["id"]),
