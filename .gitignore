@@ -8,6 +8,7 @@ backend/media/
 backend/**/__pycache__/
 frontend/node_modules/
 frontend/dist/
+frontend/.next/
 frontend/.env
 .pytest_cache/
 *.egg-info/

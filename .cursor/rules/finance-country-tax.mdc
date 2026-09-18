@@ -1,0 +1,14 @@
+---
+description: Country tax packs plug into the generic engine; no seeded jurisdiction compliance.
+alwaysApply: true
+---
+
+# Country tax packs
+
+A later country tax system plugs into the generic engine. Do **not** rebuild posting.
+
+Per country, add later: a pack in `PACKS` (code, extra invoice fields, e-invoicing/filing flags), optional seed `TaxRate` rows the accountant owns, then enable with `reviewed: true`. `AE`/`GB` are rejected on purpose — no fixtures, no claimed compliance.
+
+Already works without a pack: exclusive/inclusive, compound (tax-on-tax vs GST+PST in parallel), reverse charge, invoice-time withholding, recoverable/irrecoverable, valid-from/to. An org can create “UAE 5% VAT” as a rate today; that is configuration, not a UAE country pack.
+
+A pack will not magically give you: payment-time WHT, place-of-supply matrices, Fatoora/PEPPOL/GST e-invoicing XML, VAT return filing. Those are extra services when a named jurisdiction is chosen.
