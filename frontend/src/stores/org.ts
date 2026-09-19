@@ -15,6 +15,10 @@ export const useOrg = create<OrgState>()(
       setOrg: (org) =>
         set(org ? { orgId: org.id, orgName: org.name } : { orgId: null, orgName: null }),
     }),
-    { name: "uap-org" }
+    {
+      name: "uap-org",
+      // Avoid SSR mismatch: localStorage must not apply until after React hydrates.
+      skipHydration: true,
+    }
   )
 );

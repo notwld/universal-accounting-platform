@@ -38,7 +38,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           onClick={() => setNavOpen(false)}
         />
         <AppSidebar open={navOpen} onNavigate={() => setNavOpen(false)} />
-        <div className="min-w-0 flex-1 overflow-auto">{children}</div>
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">{children}</div>
       </div>
     </div>
   );

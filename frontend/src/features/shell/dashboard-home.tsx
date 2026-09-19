@@ -30,7 +30,7 @@ export function DashboardHome() {
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-4 p-4 sm:gap-6 sm:p-6">
+    <div className="mx-auto flex h-full w-full max-w-[1600px] flex-col gap-4 overflow-auto p-4 sm:gap-6 sm:p-6">
       <div className="min-w-0">
         <p className="text-sm text-muted-foreground">Dashboard</p>
         <h1 className="text-balance text-xl font-semibold tracking-tight sm:text-2xl">

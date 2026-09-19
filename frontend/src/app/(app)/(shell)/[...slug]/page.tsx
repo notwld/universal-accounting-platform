@@ -12,5 +12,5 @@ export default async function ModulePage({ params }: Props) {
   const page = resolveModulePage(pathname);
   if (!page) notFound();
 
-  return <ModulePlaceholder title={page.label} group={page.group} api={page.api} />;
+  return <ModulePlaceholder title={page.label} group={page.group} />;
 }
